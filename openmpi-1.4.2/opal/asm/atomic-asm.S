@@ -1,0 +1,1 @@
+../../opal/asm/generated/atomic-ia32-linux.s
