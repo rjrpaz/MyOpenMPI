@@ -54,7 +54,7 @@ int my_size, my_rank;
 my_sr_node *my_nodes;
 MPI_Datatype Rankaddr;
 unsigned char my_mac_address[6];
-int my_socket_raw, my_ifindex;
+int my_socket_raw_send, my_socket_raw_recv, my_ifindex;
 struct sockaddr_ll my_socket_address;
 
 
@@ -97,19 +97,33 @@ int MPI_Myinit(int *argc, char ***argv)
 	if (my_size > 1) {
 
 		/* Determino mi propia mac address para socket raw */
-		my_socket_raw = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
-		if (my_socket_raw == -1) {
-			perror("socket():");
+		my_socket_raw_send = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
+		if (my_socket_raw_send == -1) {
+			perror("socket() para send:");
 			return(MPI_ERR_SOCKET_RAW);
 		}
 
+		my_socket_raw_recv = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
+		if (my_socket_raw_recv == -1) {
+			perror("socket() para send:");
+			return(MPI_ERR_SOCKET_RAW);
+		}
+
+
+#ifdef DEBUG
+//  printf("Successfully opened socket: %i\n", sd);
+    printf("Successfully opened my_socket_raw_send: %i\n", my_socket_raw_send);
+    printf("Successfully opened my_socket_raw_recv: %i\n", my_socket_raw_recv);
+#endif
+
+
 		strncpy(my_ifr.ifr_name, DEVICE, IFNAMSIZ);
-		if (ioctl(my_socket_raw, SIOCGIFHWADDR, &my_ifr) == -1) {
+		if (ioctl(my_socket_raw_send, SIOCGIFHWADDR, &my_ifr) == -1) {
 			perror("SIOCGIFINDEX");
 			return(MPI_ERR_SOCKET_RAW);
 		}
 		my_ifindex = my_ifr.ifr_ifindex;
-		close (my_socket_raw);
+//		close (my_socket_raw);
 
 		my_socket_address.sll_family = PF_PACKET;
 		my_socket_address.sll_protocol = htons(ETH_P_IP);
@@ -221,6 +235,7 @@ int MPI_Myinit(int *argc, char ***argv)
 
   OPAL_CR_INIT_LIBRARY();
 
+	MPI_Barrier(MPI_COMM_WORLD);
   return MPI_SUCCESS;
 #endif
 }

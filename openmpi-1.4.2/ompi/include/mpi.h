@@ -762,7 +762,7 @@ typedef struct my_list_node my_sr_node;
 OMPI_DECLSPEC extern int my_size, my_rank;
 OMPI_DECLSPEC extern my_sr_node *my_nodes;
 OMPI_DECLSPEC extern MPI_Datatype Rankaddr;
-OMPI_DECLSPEC extern int my_socket_raw, my_ifindex;
+OMPI_DECLSPEC extern int my_socket_raw_send, my_socket_raw_recv, my_ifindex;
 OMPI_DECLSPEC extern unsigned char my_mac_address[6];
 OMPI_DECLSPEC extern struct sockaddr_ll my_socket_address;
 

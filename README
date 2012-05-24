@@ -1,0 +1,7 @@
+
+Lineas generales para la compilacion:
+./configure --prefix=/home/robertorp/packages/openmpi-1.4.2 --enable-orterun-prefix-by-default --enable-mpirun-prefix-by-
+default --enable-debug --disable-mpi-f77 --disable-mpi-f90 --disable-mpi-cxx
+make
+make install
+

@@ -124,7 +124,7 @@ int create_udp_socket(int port);		    /*returns a socket despriptor the a newly 
 
 #define BUF_SIZE ETH_FRAME_TOTALLEN
 #define NUMBER_OF_MESUREMENTS_PER_AMOUNT_OF_DATA 1000
-int sd = 0;						/*Socketdescriptor */
+//int sd = 0;						/*Socketdescriptor */
 void *buffers = NULL;
 void *buffer2 = NULL;
 long total_sent_packets = 0;
@@ -156,6 +156,7 @@ int MPI_Mysend(void *buf, int count, MPI_Datatype type, int dest,
 //	int s = 0, sent, ifindex = 0, i = 0;
 //	struct sockaddr_ll socket_address;
 //	struct ifreq ifr;
+	unsigned char *packet_number;
 
 //	void *buffer = NULL;
 	void *i_buff = NULL;
@@ -183,7 +184,8 @@ int MPI_Mysend(void *buf, int count, MPI_Datatype type, int dest,
 
 	buffers = (void *) malloc(BUF_SIZE);	/*Buffer for ethernet frame */
 	unsigned char *etherhead = buffers;	/*Pointer to ethenet header */
-	unsigned char *data = buffers + 14;	/*Userdata in ethernet frame */
+//	unsigned char *data = buffers + 14;	/*Userdata in ethernet frame */
+	unsigned char *data = buffers + 15;	/*Userdata in ethernet frame */
 	struct ethhdr *eh = (struct ethhdr *) etherhead;	/*Another pointer to ethernet header */
 
 	unsigned char src_mac[6];	/*our MAC address */
@@ -206,20 +208,26 @@ int MPI_Mysend(void *buf, int count, MPI_Datatype type, int dest,
 	printf("Client started, entering initialiation phase...\n");
 #endif
 
+
+//	close(my_socket_raw_recv);
 	/*open socket */
+/*
 	sd = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
 	if (sd == -1) {
 		perror("socket():");
 		exit(1);
 	}
+*/
 #ifdef DEBUG
-	printf("Successfully opened socket: %i\n", sd);
+//	printf("Successfully opened socket: %i\n", sd);
+	printf("Successfully opened socket en mysend: %i\n", my_socket_raw_send);
 #endif
 
 	/*retrieve ethernet interface index */
 	strncpy(ifr.ifr_name, DEVICE, IFNAMSIZ);
-	if (ioctl(sd, SIOCGIFINDEX, &ifr) == -1) {
-		perror("SIOCGIFINDEX");
+//	if (ioctl(sd, SIOCGIFINDEX, &ifr) == -1) {
+	if (ioctl(my_socket_raw_send, SIOCGIFINDEX, &ifr) == -1) {
+		perror("SIOCGIFINDEX en mysend");
 		exit(1);
 	}
 	ifindex = ifr.ifr_ifindex;
@@ -228,8 +236,9 @@ int MPI_Mysend(void *buf, int count, MPI_Datatype type, int dest,
 #endif
 
 	/*retrieve corresponding MAC */
-	if (ioctl(sd, SIOCGIFHWADDR, &ifr) == -1) {
-		perror("SIOCGIFINDEX");
+//	if (ioctl(sd, SIOCGIFHWADDR, &ifr) == -1) {
+	if (ioctl(my_socket_raw_send, SIOCGIFHWADDR, &ifr) == -1) {
+		perror("SIOCGIFHWADDR en mysend");
 		exit(1);
 	}
 	for (i = 0; i < 6; i++) {
@@ -292,9 +301,16 @@ int MPI_Mysend(void *buf, int count, MPI_Datatype type, int dest,
 		gettimeofday(&begin, NULL);
 
 		for (j = 0; j < NUMBER_OF_MESUREMENTS_PER_AMOUNT_OF_DATA; j++) {
+			memcpy((void *) (buffers + ETH_HEADER_LEN), (void *) packet_number, 1);
 			/*send packet */
+/*
 			sent =
 				sendto(sd, buffers, i + ETH_HEADER_LEN, 0,
+					   (struct sockaddr *) &socket_address,
+					   sizeof(socket_address));
+*/
+			sent =
+				sendto(my_socket_raw_send, buffers, i + ETH_HEADER_LEN + 1, 0,
 					   (struct sockaddr *) &socket_address,
 					   sizeof(socket_address));
 			if (sent == -1) {
@@ -302,15 +318,34 @@ int MPI_Mysend(void *buf, int count, MPI_Datatype type, int dest,
 				exit(1);
 			}
 
-			/*Wait for incoming packet... */
-			length = recvfrom(sd, buffer2, BUF_SIZE, 0, NULL, NULL);
-			printf("RECIBIDO LARGO %d\d", length);
-			if (length == -1) {
-				perror("recvfrom():");
-				exit(1);
+
+
+#if 0
+			/*Espera por el handshake... */
+    		while (1) {
+        		memset(i_buff, 0x0, BUF_SIZE);
+//			length = recvfrom(sd, buffer2, BUF_SIZE, 0, NULL, NULL);
+				length = recvfrom(my_socket_raw_send, i_buff, BUF_SIZE, 0, NULL, NULL);
+//			printf("RECIBIDO LARGO %d\n", length);
+				if (length == -1) {
+					perror("recvfrom():");
+					exit(1);
+				}
+        		if (i_eh->h_proto == ETH_P_NULL && memcmp((const void *) i_eh->h_dest, (const void *) src_mac,
+                      ETH_MAC_LEN) == 0 && length == (ETH_HEADER_LEN+1) && ((void *) i_data == (void *)packet_number)) {
+					break;
+				}
+
+
+
 			}
+#endif
+
+			*packet_number++;
+			total_sent_packets++;
 
 		}
+
 		gettimeofday(&end, NULL);
 		/*...and calculate difference......... */
 		timersub(&end, &begin, &result);
@@ -320,11 +355,34 @@ int MPI_Mysend(void *buf, int count, MPI_Datatype type, int dest,
 		printf("Enviar %d bytes tarda %lld microsegundos en promedio\n", i,
 			   allovertime / NUMBER_OF_MESUREMENTS_PER_AMOUNT_OF_DATA);
 	}
-	return(0);
+
+	sent =
+				sendto(my_socket_raw_send, buffers, ETH_HEADER_LEN, 0,
+					   (struct sockaddr *) &socket_address,
+					   sizeof(socket_address));
+			if (sent == -1) {
+				perror("sendto():");
+				exit(1);
+			}
 
 
 
 
+
+
+
+
+
+
+	printf("Totally sent: %ld packets\n", total_sent_packets);
+	printf("Volviendo de MPI_MySend ...\n");
+	OMPI_ERRHANDLER_RETURN(rc, comm, rc, FUNC_NAME);
+
+
+
+
+	// BORRAR
+	int sd = 0;
 
 
 

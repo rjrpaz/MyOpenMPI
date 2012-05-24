@@ -131,7 +131,7 @@ int create_udp_socket(int port);		    /*returns a socket despriptor the a newly 
 
 #define BUF_SIZE ETH_FRAME_TOTALLEN
 
-int s = 0;						/*Socketdescriptor */
+//int s = 0;						/*Socketdescriptor */
 void *buffer = NULL;
 long total_packets = 0;
 long answered_packets = 0;
@@ -217,26 +217,35 @@ int MPI_Myrecv(void *buf, int count, MPI_Datatype type, int source,
 
 	printf("Server started, entering initialiation phase...\n");
 
+//	close(my_socket_raw_send);
 	/*open socket */
+/*
 	s = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
 	if (s == -1) {
 		perror("socket():");
 		exit(1);
 	}
 	printf("Successfully opened socket: %i\n", s);
+*/
+#ifdef DEBUG
+//  printf("Successfully opened socket: %i\n", sd);
+    printf("Successfully opened socket en myrecv: %i\n", my_socket_raw_recv);
+#endif
 
 	/*retrieve ethernet interface index */
 	strncpy(ifr.ifr_name, DEVICE, IFNAMSIZ);
-	if (ioctl(s, SIOCGIFINDEX, &ifr) == -1) {
-		perror("SIOCGIFINDEX");
+//	if (ioctl(s, SIOCGIFINDEX, &ifr) == -1) {
+	if (ioctl(my_socket_raw_recv, SIOCGIFINDEX, &ifr) == -1) {
+		perror("SIOCGIFINDEX en myrecv");
 		exit(1);
 	}
 	ifindex = ifr.ifr_ifindex;
 	printf("Successfully got interface index: %i\n", ifindex);
 
 	/*retrieve corresponding MAC */
-	if (ioctl(s, SIOCGIFHWADDR, &ifr) == -1) {
-		perror("SIOCGIFINDEX");
+//	if (ioctl(s, SIOCGIFHWADDR, &ifr) == -1) {
+	if (ioctl(my_socket_raw_recv, SIOCGIFHWADDR, &ifr) == -1) {
+		perror("SIOCGIFHWADDR en myrecv");
 		exit(1);
 	}
 	for (i = 0; i < 6; i++) {
@@ -267,7 +276,8 @@ int MPI_Myrecv(void *buf, int count, MPI_Datatype type, int source,
 	while (1) {
 		/*Wait for incoming packet... */
 		memset(buffer, 0x0, BUF_SIZE);
-		length = recvfrom(s, buffer, BUF_SIZE, 0, NULL, NULL);
+//		length = recvfrom(s, buffer, BUF_SIZE, 0, NULL, NULL);
+		length = recvfrom(my_socket_raw_recv, buffer, BUF_SIZE, 0, NULL, NULL);
 		if (length == -1) {
 			perror("recvfrom():");
 			exit(1);
@@ -277,6 +287,7 @@ int MPI_Myrecv(void *buf, int count, MPI_Datatype type, int source,
 		if (eh->h_proto == ETH_P_NULL
 			&& memcmp((const void *) eh->h_dest, (const void *) src_mac,
 					  ETH_MAC_LEN) == 0) {
+			printf("LARGO: %d ETH_MAC_LEN: %d\n", length, ETH_MAC_LEN);
 			if (length < 5) {
 				printf("LARGO: %d ETH_MAC_LEN: %d\n", length, ETH_MAC_LEN);
 
@@ -288,6 +299,8 @@ int MPI_Myrecv(void *buf, int count, MPI_Datatype type, int source,
 					printf("%02X ", *(unsigned char *) (buffer + i));
 				printf("\n\tFin del DUMP\n");
 			}
+			if (length == ETH_HEADER_LEN)
+				break;
 
 			/*exchange addresses in buffer */
 			memcpy((void *) etherhead,
@@ -304,9 +317,15 @@ int MPI_Myrecv(void *buf, int count, MPI_Datatype type, int source,
 			socket_address.sll_addr[5] = eh->h_dest[5];
 
 			/*send answer */
-	
+/*
 			sent =
 				sendto(s, buffer, length - 4, 0,
+					   (struct sockaddr *) &socket_address,
+					   sizeof(socket_address));
+*/
+/*
+			sent =
+				sendto(my_socket_raw_recv, buffer, length - 4, 0,
 					   (struct sockaddr *) &socket_address,
 					   sizeof(socket_address));
 			if (sent == -1) {
@@ -315,12 +334,18 @@ int MPI_Myrecv(void *buf, int count, MPI_Datatype type, int source,
 				exit(1);
 			}
 
+*/
 			answered_packets++;
+			if (answered_packets % 1000 == 0)
+				printf("Fueron respondidos %d datagramas\n", answered_packets);
+
 		}
 
 		total_packets++;
 	}
-	return(0);
+	printf("Volviendo de MPI_MyRecv ...\n");
+	printf("Total de paquetes procesados: %ld packets\n", answered_packets);
+	OMPI_ERRHANDLER_RETURN(rc, comm, rc, FUNC_NAME);
 
 
 
@@ -330,7 +355,8 @@ int MPI_Myrecv(void *buf, int count, MPI_Datatype type, int source,
 
 
 
-
+	// BORRAR
+	int s = 0;
 
 
 
@@ -383,7 +409,7 @@ int MPI_Myrecv(void *buf, int count, MPI_Datatype type, int source,
 //  printf("Successfully got interface index en myrecv: %i\n", my_ifindex);
 //  printf ("MI MAC address ES: %02X:%02X:%02X:%02X:%02X:%02X\n", my_mac_address[0], my_mac_address[1], my_mac_address[2], my_mac_address[3], my_mac_address[4], my_mac_address[5]);
 
-//  printf ("Marca 1\n");
+  printf ("Marca 1\n");
 //  memcpy((void *) data, (const void *) "K", 1);
 
 	*o_data = 'K';
@@ -433,7 +459,7 @@ int MPI_Myrecv(void *buf, int count, MPI_Datatype type, int source,
 
 
 
-//  printf ("Marca 2\n");
+  printf ("Marca 2\n");
 
 	while (1) {
 		/*Wait for incoming packet... */
@@ -443,7 +469,7 @@ int MPI_Myrecv(void *buf, int count, MPI_Datatype type, int source,
 			perror("recvfrom():");
 			exit(1);
 		}
-/*
+
 #ifdef DEBUG
 		printf("\tProcesando un paquete recibido de largo %d\n", length);
 		printf("\tDUMP del paquete\n\t");
@@ -451,7 +477,7 @@ int MPI_Myrecv(void *buf, int count, MPI_Datatype type, int source,
 			printf("%02X ", *(unsigned char *) (buffer + i));
 		printf("\n\tFin del DUMP\n");
 #endif
-*/
+
 		/*See if we should answer (Ethertype == 0x0 && destination address == our MAC) */
 		if (eh->h_proto == ETH_P_NULL
 			&& memcmp((const void *) eh->h_dest,
@@ -466,6 +492,9 @@ int MPI_Myrecv(void *buf, int count, MPI_Datatype type, int source,
 				   (const void *) (etherhead + ETH_MAC_LEN), ETH_MAC_LEN);
 			memcpy((void *) (o_buff + ETH_MAC_LEN),
 				   (const void *) my_mac_address, ETH_MAC_LEN);
+			/* Nro. de secuencia */
+			memcpy((void *) (o_buff + ETH_HEADER_LEN),
+				   (const void *) (buffer + ETH_HEADER_LEN), 1);
 
 /*
 			my_socket_address.sll_addr[0] = eh->h_dest[0];

@@ -37,7 +37,8 @@ int MPI_Myfinalize(void)
 
 	if (my_size > 1) {
 		free(my_nodes);
-		close(my_socket_raw);
+		close(my_socket_raw_send);
+		close(my_socket_raw_recv);
 	}
 
     return ompi_mpi_finalize();
