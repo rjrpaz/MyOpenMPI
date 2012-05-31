@@ -1,0 +1,14 @@
+- Para traer repositorio GIT:
+
+git clone https://github.com/rjrpaz/os-implementation
+
+# Para actualizar cambio
+git pull https://github.com/dmoisset/os-implementation master
+
+#- Para hacer la mezcla entre el original y el mio:
+# git pull https://github.com/ehames/os-implementation master (NO ANDA).
+
+Para subir
+git commit -a
+git push
+

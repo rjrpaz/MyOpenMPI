@@ -1,0 +1,2 @@
+- Para sniffear este tráfico en la eth0
+tcpdump -X -s 9000 -v -n -i eth0 ether dst 00:19:D1:99:79:B6 and ether src 00:19:D1:99:79:B6
