@@ -27,7 +27,12 @@
 #include <netinet/in.h>
 #include <time.h>
 
+//#define DEBUG 1
+#undef DEBUG
+
 #define CHUNK 1024
+
+#define RETRY 3
 
 #define BUF_SIZE ETH_FRAME_TOTALLEN
 // #define NUMBER_OF_MESUREMENTS_PER_AMOUNT_OF_DATA 100000 /*how often to measure travelling time with one certain amount of data*/
@@ -37,11 +42,18 @@ void sigint(int);
 
 void usage(char *);
 
-void error(char *);
+extern void error(char *);
+
+extern void timeout_func(int);
 
 int s = 0;						/*Socketdescriptor */
+
 //void *buffer = NULL;
 long total_sent_packets = 0;
+unsigned long total_file_read = 0;
+
+unsigned long timeout_count = 0;
+int filefd = 0;	/* Descriptor del archivo que se va a transferir */
 
 int main(int argc, char *argv[])
 {
@@ -54,14 +66,16 @@ int main(int argc, char *argv[])
 
 	unsigned char src_mac[6];	/*our MAC address */
 //  unsigned char dest_mac[6] = {0x00, 0x04, 0x75, 0xC8, 0x28, 0xE5};   /*other host MAC address, hardcoded...... :-(*/
-	unsigned char dest_mac[6] = { 0x00, 0x19, 0xD1, 0x99, 0x79, 0xB6 };
+	// Consulfem
+	// unsigned char dest_mac[6] = { 0x00, 0x19, 0xD1, 0x99, 0x79, 0xB6 };
+	// Casa wlan0
+	unsigned char dest_mac[6] = { 0x00, 0x22, 0x43, 0x0d, 0x5c, 0x4b };
 
 	struct ifreq ifr;
 	struct sockaddr_ll socket_address;
 	int ifindex = 0;			/*Ethernet Interface index */
 	int i;
 
-	int filefd = 0;
 	void *buffer_read = NULL;	/* buffer que contiene chunk de archivo leido */
 	int length_read = 0;
 	int length_sent = 0;		/* largo de paquete enviado */
@@ -69,11 +83,7 @@ int main(int argc, char *argv[])
 	void *buffer_recv = NULL;	/* buffer que contiene paquete leido */
 	buffer_recv = (void *) malloc(BUF_SIZE);
 	unsigned char *etherhead_recv = buffer_recv;	/*Pointer to ethenet header */
-	unsigned char *data_recv = buffer_recv + 14;	/*Userdata in ethernet frame */
 	struct ethhdr *eh_recv = (struct ethhdr *) etherhead_recv;	/*Another pointer to ethernet header */
-
-
-
 
 	int length_recv = 0;		/* largo de paquete recibido */
 	char host[BUF_SIZE], path[BUF_SIZE], filename[BUF_SIZE];
@@ -85,6 +95,7 @@ int main(int argc, char *argv[])
 	struct timeval result;
 	unsigned long long allovertime;
 
+	unsigned char nro_secuencia = 0;
 
 	buffer_read = (void *) malloc(BUF_SIZE);
 
@@ -93,6 +104,8 @@ int main(int argc, char *argv[])
 
 	sprintf(host, "%s", argv[1]);
 	sprintf(path, "%s", argv[2]);
+
+	int nro_retry_congelado = 0;
 
 	parse = malloc(BUF_SIZE);
 	sprintf(parse, "%s", path);
@@ -103,7 +116,9 @@ int main(int argc, char *argv[])
 		parse = strtok(NULL, "/");
 	}
 
+#ifdef DEBUG
 	printf("Client started, entering initialiation phase...\n");
+#endif
 
 	/*open socket */
 	s = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
@@ -111,7 +126,10 @@ int main(int argc, char *argv[])
 		perror("socket():");
 		exit(1);
 	}
+
+#ifdef DEBUG
 	printf("Successfully opened socket: %i\n", s);
+#endif
 
 	/*retrieve ethernet interface index */
 	strncpy(ifr.ifr_name, DEVICE, IFNAMSIZ);
@@ -120,7 +138,9 @@ int main(int argc, char *argv[])
 		exit(1);
 	}
 	ifindex = ifr.ifr_ifindex;
+#ifdef DEBUG
 	printf("Successfully got interface index: %i\n", ifindex);
+#endif
 
 	/*retrieve corresponding MAC */
 	if (ioctl(s, SIOCGIFHWADDR, &ifr) == -1) {
@@ -155,67 +175,82 @@ int main(int argc, char *argv[])
 
 	/*establish signal handler */
 	signal(SIGINT, sigint);
+#ifdef DEBUG
 	printf("Successfully established signal handler for SIGINT\n");
 
 	printf("We are in production state, sending packets....\n");
+#endif
 
 	allovertime = 0;
 
-//	printf("PATH: %s\n", path);
+//  printf("PATH: %s\n", path);
 	/* Abro archivo */
 	if ((filefd = (open(path, O_RDONLY))) < 0) {
 		error("Error al intentar leer archivo local.\n");
 	}
-//	printf("FILEFD: %d\n", filefd);
+//  printf("FILEFD: %d\n", filefd);
 
+	nro_retry_congelado = 0;
 	memset(buffer_read, 0x0, BUF_SIZE);
 	memset(buffer_sent, 0x0, BUF_SIZE);
 	/* Leo archivo de forma secuencial */
 	while ((length_read = read(filefd, buffer_read, CHUNK)) > 0) {
+#ifdef DEBUG
 		printf("Se leyeron %d bytes del archivo\n", length_read);
+#endif
+
+		if ((total_sent_packets % 7103 == 0) && (total_sent_packets > 0)) {
+			if (nro_retry_congelado == 0) {
+				nro_retry_congelado = 1;
+				pause();
+			} else {
+				nro_retry_congelado = 0;
+			}
+		}
 
 
 		/* preparo buffer donde envio dato */
-		printf("Marca 0\n");
 		memcpy((void *) buffer_sent, (void *) dest_mac, ETH_MAC_LEN);
 
-printf("\nDUMP\n");
-for (i=0; i<8; i++)
-printf("%02X ", *(unsigned char *)(buffer_sent + i));
-printf("\nFin de DUMP\n");
+#ifdef DEBUG
+		printf("\nDUMP\n");
+		for (i = 0; i < 8; i++)
+			printf("%02X ", *(unsigned char *) (buffer_sent + i));
+		printf("\nFin de DUMP\n");
+#endif
 
-		printf("Marca 01\n");
 		memcpy((void *) (buffer_sent + ETH_MAC_LEN), (void *) src_mac,
 			   ETH_MAC_LEN);
 
-printf("\nDUMP\n");
-for (i=0; i<14; i++)
-printf("%02X ", *(unsigned char *)(buffer_sent + i));
-printf("\nFin de DUMP\n");
+#ifdef DEBUG
+		printf("\nDUMP\n");
+		for (i = 0; i < 14; i++)
+			printf("%02X ", *(unsigned char *) (buffer_sent + i));
+		printf("\nFin de DUMP\n");
+#endif
 
-		printf("Marca 02\n");
-//		eh->h_proto = ETH_P_NULL;
+//      eh->h_proto = ETH_P_NULL;
 		/* Numero de secuencia */
-		printf("Marca 03\n");
-		data[0] = (unsigned char) ((int) (total_sent_packets));
+		data[0] = nro_secuencia;
 		/* Contenido del chunk del archivo */
-		printf("Marca LENGTH: %d\n", length_read);
-//		printf("Buffer: %s\n", buffer_read);
+//		printf("Marca LENGTH: %d\n", length_read);
 		memcpy((void *) (data + 1), (void *) buffer_read, length_read);
-		printf("Marca 2\n");
-		printf("BufferSENT: %s\n", (char *) buffer_sent);
+//		printf("BufferSENT: %s\n", (char *) buffer_sent);
 
 
-printf("\nDUMP datos leidos archivo\n");
-for (i=0; i<length_read+2; i++)
-printf("%02X ", *(unsigned char *)(data + i));
-printf("\nFin de DUMP\n");
+#ifdef DEBUG
+		printf("\nDUMP datos leidos archivo\n");
+		for (i = 0; i < length_read + 2; i++)
+			printf("%02X ", *(unsigned char *) (data + i));
+		printf("\nFin de DUMP\n");
 
+		printf("\nDUMP buffer_sent\n");
+		for (i = 0; i < length_read + 14 + 2; i++)
+			printf("%02X ", *(unsigned char *) (buffer_sent + i));
+		printf("\nFin de DUMP\n");
+#endif
 
-printf("\nDUMP buffer_sent\n");
-for (i=0; i<length_read+14+2; i++)
-printf("%02X ", *(unsigned char *)(buffer_sent + i));
-printf("\nFin de DUMP\n");
+//resend:
 
 		/*clear the timers: */
 		timerclear(&begin);
@@ -223,6 +258,11 @@ printf("\nFin de DUMP\n");
 
 		/*get time before sending..... */
 		gettimeofday(&begin, NULL);
+
+
+		/* Lanzo timer por timeout */
+		signal(SIGALRM, timeout_func);
+		alarm(1);
 
 		/* Envio paquete con pedazo de archivo */
 		length_sent =
@@ -233,26 +273,40 @@ printf("\nFin de DUMP\n");
 			perror("sendto():");
 			exit(1);
 		}
-		printf("Enviado\n");
+//		printf("Enviado\n");
 
 		/* Espero por handshake de pedazo enviado */
 		while ((length_recv =
 				recvfrom(s, buffer_recv, BUF_SIZE, 0, NULL, NULL)) != -1) {
 
-			/* Confirmo si el paquete recibido es handshake del paquete enviado */
+			/*
+	         * Espero para recibir el paquete de ACK, que debe incluir:
+    	     * 1) Ethertype == 0x0
+        	 * 2) Direccion ethernet de destino == nuestra MAC
+	         * 3) Primer byte de datos == nro. de secuencia
+    	     */
 			if (eh_recv->h_proto == ETH_P_NULL
-				&&
-				(memcmp
-				 ((const void *) eh_recv->h_dest,
-				  (const void *) src_mac, ETH_MAC_LEN) == 0)
-				&& (length_recv == 15)) {
-				printf("Nro. secuencia ACK: %d. Largo: %d\n",
-					   (unsigned int) *(data_recv), length_recv);
+				&& (length_recv == 15)
+				&& (memcmp ((const void *) eh_recv->h_dest, (const void *) src_mac, ETH_MAC_LEN) == 0)
+				&& (memcmp ((unsigned char *) (buffer_recv + 14), (const void *) &nro_secuencia, 1) == 0)
+				) {
 
-printf("\nDUMP handshake received\n");
-for (i=0; i<15; i++)
-printf("%02X ", *(unsigned char *)(buffer_recv + i));
-printf("\nFin de DUMP\n");
+//				alarm(0);
+
+//#ifdef DEBUG
+				unsigned char *data_recv = buffer_recv + 14;	/*Userdata in ethernet frame */
+				printf("Nro. secuencia local: %u. Nro. secuencia ACK: %d. Largo: %d\n",
+					   nro_secuencia, (unsigned int) *(data_recv), length_recv);
+
+#ifdef DEBUG
+				printf("\nDUMP handshake received\n");
+				for (i = 0; i < 15; i++)
+					printf("%02X ", *(unsigned char *) (buffer_recv + i));
+				printf("\nFin de DUMP\n");
+#endif
+
+				/* Chequea si el nro. de secuencia es igual al anterior */
+
 
 				/*get time after sending..... */
 				gettimeofday(&end, NULL);
@@ -261,20 +315,22 @@ printf("\nFin de DUMP\n");
 
 				allovertime +=
 					((result.tv_sec * 1000000) + result.tv_usec);
+
+				nro_secuencia++;
 				break;
 			}
 		}
 
 		total_sent_packets++;
+		total_file_read += length_read;
 		memset(buffer_read, 0x0, BUF_SIZE);
 		memset(buffer_sent, 0x0, BUF_SIZE);
 		memset(buffer_recv, 0x0, BUF_SIZE);
 	}
 
-//	printf("Sending %i bytes takes %lld microseconds in average\n", i, allovertime / NUMBER_OF_MESUREMENTS_PER_AMOUNT_OF_DATA);
-	exit(0);
+//  printf("Sending %i bytes takes %lld microseconds in average\n", i, allovertime / NUMBER_OF_MESUREMENTS_PER_AMOUNT_OF_DATA);
 
-	printf("Totally sent: %ld packets\n", total_sent_packets);
+	printf("Totally sent: %ld packets. Cant timeouts %lu\n", total_sent_packets, timeout_count);
 	return (0);
 }
 
@@ -297,7 +353,7 @@ void sigint(int signum)
 
 	printf("Client terminating....\n");
 
-	printf("Totally sent: %ld packets\n", total_sent_packets);
+	printf("Totally sent: %ld packets. Cant timeouts %lu\n", total_sent_packets, timeout_count);
 	exit(0);
 }
 
@@ -308,12 +364,3 @@ void usage(char *argv0)
 	exit(EXIT_SUCCESS);
 }
 
-void error(char *msg)
-{
-	if (errno == 0) {
-		fprintf(stderr, msg);
-	} else {
-		perror(msg);
-	}
-	exit(0);
-}

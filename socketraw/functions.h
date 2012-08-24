@@ -10,3 +10,4 @@ extern ssize_t r_write(int sd, const void *buf, size_t count);
 extern void error (char *);
 extern void warning (char *);
 
+extern int myprintf(const char *fmt, ...);

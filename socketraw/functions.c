@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdarg.h>
 #include <string.h>
 #include <unistd.h>
 #include <errno.h>
@@ -12,8 +13,14 @@
 
 #include "common.h"
 
+#define DEBUG 1
+//#undef DEBUG
+
 void error(char *);
 void warning(char *);
+
+extern long unsigned int timeout_count, total_file_read;
+extern int filefd;
 
 int r_open(const char *host, const char *pathname, int flags)
 {
@@ -198,3 +205,55 @@ void warning(char *msg)
 	fprintf(stderr, msg);
 	return;
 }
+
+void timeout_func(int signo)
+{
+//        char msg[101];
+
+	printf("Llego SIGARLM\n");
+//        exit(0);
+//      goto resend;
+	timeout_count++;
+	if (lseek(filefd, total_file_read, SEEK_SET) < 0) {
+		printf("No se pudo reposicionar archivo\n");
+		exit(0);
+	}
+	return;
+}
+
+
+int myprintf(const char *fmt, ...) {
+	va_list ap;
+	va_start(ap,fmt);
+
+                   int d;
+                   char c, *s;
+
+                   while (*fmt)
+                        switch(*fmt++) {
+                        case 's':           /* string */
+                             s = va_arg(ap, char *);
+                             printf("es string %s\n", s);
+                             break;
+                        case 'd':           /* int */
+                             d = va_arg(ap, int);
+                             printf("es int %d\n", d);
+                             break;
+                        case 'c':           /* char */
+                             /* need a cast here since va_arg only
+                                takes fully promoted types */
+                             c = (char) va_arg(ap, int);
+                             printf("es char %c\n", c);
+                             break;
+                        }
+                   va_end(ap);
+
+
+
+#ifdef DEBUG
+	return(printf(fmt,ap));
+#else
+    return 0;
+#endif
+}
+

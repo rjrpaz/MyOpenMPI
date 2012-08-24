@@ -31,6 +31,8 @@
 
 #define BUF_SIZE ETH_FRAME_TOTALLEN
 
+void timeout_func(int);
+
 int s = 0, filefd = 0;			/*Socketdescriptor */
 //void *buffer = NULL;
 long total_packets = 0;
@@ -38,23 +40,28 @@ long answered_packets = 0;
 
 void error(char *);
 
+void *buffer_sent;
+struct sockaddr_ll socket_address;
+
 int main(void)
 {
 	void *buffer_recv = NULL;
 	buffer_recv = (void *) malloc(BUF_SIZE);	/*Buffer for Ethernet Frame */
 	unsigned char *etherhead = buffer_recv;	/*Pointer to Ethenet Header */
 	struct ethhdr *eh = (struct ethhdr *) etherhead;	/*Another pointer to ethernet header */
+	unsigned char *data;
 
 	unsigned char src_mac[6];	/*our MAC address */
 
+	unsigned char nro_secuencia = 255, nro_secuencia_ant = 255;
 
-	void *buffer_sent = NULL;
+
+	buffer_sent = NULL;
 	buffer_sent = (void *) malloc(BUF_SIZE);	/*Buffer for Ethernet Frame */
 	unsigned char *etherhead_sent = buffer_sent;	/*Pointer to Ethenet Header */
 	struct ethhdr *eh_sent = (struct ethhdr *) etherhead_sent;	/*Another pointer to ethernet header */
 
 	struct ifreq ifr;
-	struct sockaddr_ll socket_address;
 	int ifindex = 0;			/*Ethernet Interface index */
 	int i;
 	int length;					/*length of received packet */
@@ -64,15 +71,23 @@ int main(void)
 	void *buffer_write = NULL;
 	buffer_write = (void *) malloc(BUF_SIZE);	/*Buffer for Ethernet Frame */
 
-	printf("Server started, entering initialiation phase...\n");
+	unsigned short int escribir_archivo = 0;
+	unsigned char anterior = 255, nuevo = 255;
 
+	printf("Server started, entering initialiation phase...\n");
+	printf("SIZE: %d\n", BUF_SIZE);
+
+    /* Lanzo timer por timeout */
+    signal(SIGALRM, timeout_func);
+
+
+//  printf("TAMANIO DATO: %d\n", sizeof(nro_secuencia));
 	/*open socket */
 	s = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
 	if (s == -1) {
 		perror("socket():");
 		exit(1);
 	}
-
 #ifdef DEBUG
 	printf("Successfully opened socket: %i\n", s);
 #endif
@@ -124,35 +139,66 @@ int main(void)
 	if ((filefd = (open(path, O_WRONLY | O_CREAT | O_TRUNC))) < 0) {
 		error("Error al intentar leer archivo local.\n");
 	}
-
 #ifdef DEBUG
 	printf
 		("We are in production state, waiting for incoming packets....\n");
 #endif
 
 	while (1) {
+		alarm(3);
 		/*Wait for incoming packet... */
 		length = recvfrom(s, buffer_recv, BUF_SIZE, 0, NULL, NULL);
 		if (length == -1) {
 			perror("recvfrom():");
 			exit(1);
 		}
+		escribir_archivo = 0;
 
 		/*See if we should answer (Ethertype == 0x0 && destination address == our MAC) */
 		if (eh->h_proto == ETH_P_NULL
 			&& memcmp((const void *) eh->h_dest, (const void *) src_mac,
 					  ETH_MAC_LEN) == 0) {
 
+			data = buffer_recv + 14;
+			nro_secuencia = (unsigned char) *data;
+
+			/*
+			 * Copio nro de secuencia para ACK.
+			 * Si recibí el nro. de secuencia que esperaba, mando el ACK
+			 * con ese número.
+			 * Si recibo otra cosa, puedo suponer que se perdió un paquete
+			 * asi que pido nuevamente el anterior.
+			 */
+//          printf("Nro. secuencia: 0x%X ant: 0x%X\n", (unsigned char) nro_secuencia, (unsigned char) (nro_secuencia_ant + 1));
+			nuevo = (unsigned int) nro_secuencia;
+			printf("%u %u\n", (unsigned char) nuevo, anterior);
+//          if (((unsigned char)(nro_secuencia) == (unsigned char) (nro_secuencia_ant+1)) || (nro_secuencia == 0 && nro_secuencia_ant == 255)) {
+			if ((nuevo == (anterior + 1))
+				|| (nuevo == 0 && anterior == 255)) {
+//          printf("Nro. secuencia ant: %u\n", (unsigned char) nro_secuencia_ant);
+				memcpy((void *) (buffer_sent + 14),
+					   (const void *) &nro_secuencia, 1);
+				escribir_archivo = 1;
+			} else {
+//              printf("Nro. secuencia ant: %u\n", (unsigned char) nro_secuencia_ant);
+//              printf("Nuevo: %u Anterior %u\n", (unsigned char) nuevo, anterior);
+				memcpy((void *) (buffer_sent + 14),
+					   (const void *) &nro_secuencia_ant, 1);
+			}
+
 //#ifdef DEBUG
-			unsigned char *data = buffer_recv + 14;
-			printf("Nro. secuencia: %d. Largo: %d\n",
-				   (unsigned int) *(data), length);
-#ifdef DEBUG
-			printf("\nDUMP buffer_recv\n");
-			for (i = 0; i < length; i++)
-				printf("%02X ", *(unsigned char *) (buffer_recv + i));
-			printf("\nFin de DUMP\n");
-#endif
+			if (nuevo == 0xbf) {
+//          unsigned char *data = buffer_recv + 14;
+				printf("Nro. secuencia: %d. Largo: %d\n",
+//                 (unsigned int) *(data), length);
+					   (unsigned int) nro_secuencia, length);
+//#ifdef DEBUG
+				printf("\nDUMP buffer_recv\n");
+				for (i = 0; i < length; i++)
+					printf("%02X ", *(unsigned char *) (buffer_recv + i));
+				printf("\nFin de DUMP\n");
+			}
+//#endif
 
 			/*exchange addresses in buffer */
 			memcpy((void *) etherhead_sent,
@@ -160,7 +206,6 @@ int main(void)
 			memcpy((void *) (etherhead_sent + ETH_MAC_LEN),
 				   (const void *) src_mac, ETH_MAC_LEN);
 
-			/* Copio ACK */
 			memcpy((void *) (buffer_sent + 14),
 				   (const void *) (buffer_recv + 14), 1);
 
@@ -182,18 +227,23 @@ int main(void)
 				perror("sendto():");
 				exit(1);
 			}
-
-//#ifdef DEBUG
+#ifdef DEBUG
 			printf("\nDUMP buffer_sent\n");
 			for (i = 0; i < 20; i++)
 				printf("%02X ", *(unsigned char *) (buffer_sent + i));
 			printf("\nFin de DUMP\n");
-//#endif
+#endif
 
-			memcpy((void *) buffer_write, (void *) (buffer_recv + 15),
-				   length - 15);
-			write(filefd, buffer_write, length - 15);
-//			sync();
+
+//          printf("Escribir archivo: %d\n", escribir_archivo);
+			if (escribir_archivo == 1) {
+				memcpy((void *) buffer_write, (void *) (buffer_recv + 15),
+					   length - 15);
+				write(filefd, buffer_write, length - 15);
+//          sync();
+				nro_secuencia_ant = nro_secuencia;
+				anterior = nuevo;
+			}
 
 			answered_packets++;
 		}
@@ -236,3 +286,27 @@ void error(char *msg)
 	}
 	exit(0);
 }
+
+
+void timeout_func(int signo)
+{
+	int sent = 0;
+    printf("Llego SIGARLM\n");
+/*
+    timeout_count++;
+    printf("Llego SIGARLM. timeout_count %ld, filefd %d, total_file_read %ld\n", timeout_count, filefd, total_file_read);
+    if (lseek(filefd, total_file_read, SEEK_SET) < 0) {
+        printf("No se pudo reposicionar archivo\n");
+        exit(0);
+    }
+*/
+	// Reenvío el ACK
+	sent = sendto(s, buffer_sent, 15, 0, (struct sockaddr *) &socket_address, sizeof(socket_address));
+	if (sent == -1) {
+		perror("sendto():");
+		exit(1);
+	}
+
+    return;
+}
+

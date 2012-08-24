@@ -15,6 +15,9 @@
 void error(char *);
 void warning(char *);
 
+extern long unsigned int timeout_count, total_file_read;
+extern int filefd;
+
 int r_open(const char *host, const char *pathname, int flags)
 {
 	int sockfd, n;
@@ -198,3 +201,19 @@ void warning(char *msg)
 	fprintf(stderr, msg);
 	return;
 }
+
+void timeout_func(int signo)
+{
+//        char msg[101];
+
+        printf("Llego SIGARLM\n");
+//        exit(0);
+//      goto resend;
+    timeout_count++;
+    if (lseek(filefd, total_file_read, SEEK_SET) < 0) {
+        printf("No se pudo reposicionar archivo\n");
+        exit(0);
+    }
+        return;
+}
+

@@ -3,7 +3,8 @@ CFLAGS=-Wall -O2
 
 all: client server
 
-client: client.c
+client: client.c functions.c
+#	gcc ${CFLAGS} -o client client.c functions.c
 	gcc ${CFLAGS} -o client client.c
 
 server: server.c

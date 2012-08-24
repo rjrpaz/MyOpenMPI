@@ -15,6 +15,9 @@
 
 #define ETH_FRAME_TOTALLEN 1518          /*Header: 14 + User Data: 1500 FCS: 4*/
 
+// Consulfem
 #define DEVICE             "eth0"	/* Device used for communication*/
+// Casa
+// #define DEVICE             "wlan0"
 
 #define ETH_P_NULL	   0x0		/* we are running without any protocol above the Ethernet Layer*/

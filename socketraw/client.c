@@ -1,6 +1,7 @@
 //#include "client.h"
 #include "ethertest.h"
 //#include "util.h"
+//#include "functions.h"
 
 #include <sys/socket.h>
 #include <sys/ioctl.h>
@@ -32,6 +33,8 @@
 
 #define CHUNK 1024
 
+#define RETRY 3
+
 #define BUF_SIZE ETH_FRAME_TOTALLEN
 // #define NUMBER_OF_MESUREMENTS_PER_AMOUNT_OF_DATA 100000 /*how often to measure travelling time with one certain amount of data*/
 #define NUMBER_OF_MESUREMENTS_PER_AMOUNT_OF_DATA 1000	/*how often to measure travelling time with one certain amount of data */
@@ -40,11 +43,20 @@ void sigint(int);
 
 void usage(char *);
 
-void error(char *);
+extern void error(char *);
+
+//extern void timeout_func(int);
+void timeout_func(int);
+
 
 int s = 0;						/*Socketdescriptor */
+
 //void *buffer = NULL;
 long total_sent_packets = 0;
+unsigned long total_file_read = 0;
+
+unsigned long timeout_count = 0;
+int filefd = 0;					/* Descriptor del archivo que se va a transferir */
 
 int main(int argc, char *argv[])
 {
@@ -57,14 +69,16 @@ int main(int argc, char *argv[])
 
 	unsigned char src_mac[6];	/*our MAC address */
 //  unsigned char dest_mac[6] = {0x00, 0x04, 0x75, 0xC8, 0x28, 0xE5};   /*other host MAC address, hardcoded...... :-(*/
+	// Consulfem
 	unsigned char dest_mac[6] = { 0x00, 0x19, 0xD1, 0x99, 0x79, 0xB6 };
+	// Casa wlan0
+	// unsigned char dest_mac[6] = { 0x00, 0x22, 0x43, 0x0d, 0x5c, 0x4b };
 
 	struct ifreq ifr;
 	struct sockaddr_ll socket_address;
 	int ifindex = 0;			/*Ethernet Interface index */
 	int i;
 
-	int filefd = 0;
 	void *buffer_read = NULL;	/* buffer que contiene chunk de archivo leido */
 	int length_read = 0;
 	int length_sent = 0;		/* largo de paquete enviado */
@@ -94,6 +108,8 @@ int main(int argc, char *argv[])
 	sprintf(host, "%s", argv[1]);
 	sprintf(path, "%s", argv[2]);
 
+	int nro_retry_congelado = 0;
+
 	parse = malloc(BUF_SIZE);
 	sprintf(parse, "%s", path);
 	parse = strtok(parse, "/");
@@ -103,9 +119,10 @@ int main(int argc, char *argv[])
 		parse = strtok(NULL, "/");
 	}
 
-#ifdef DEBUG
 	printf("Client started, entering initialiation phase...\n");
-#endif
+
+	/* Lanzo timer por timeout */
+	signal(SIGALRM, timeout_func);
 
 	/*open socket */
 	s = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
@@ -113,7 +130,6 @@ int main(int argc, char *argv[])
 		perror("socket():");
 		exit(1);
 	}
-
 #ifdef DEBUG
 	printf("Successfully opened socket: %i\n", s);
 #endif
@@ -177,6 +193,7 @@ int main(int argc, char *argv[])
 	}
 //  printf("FILEFD: %d\n", filefd);
 
+	nro_retry_congelado = 0;
 	memset(buffer_read, 0x0, BUF_SIZE);
 	memset(buffer_sent, 0x0, BUF_SIZE);
 	/* Leo archivo de forma secuencial */
@@ -184,6 +201,28 @@ int main(int argc, char *argv[])
 #ifdef DEBUG
 		printf("Se leyeron %d bytes del archivo\n", length_read);
 #endif
+		total_file_read += length_read;
+
+		if (length_read != CHUNK)
+			printf("Se quisieron leer %d pero se leyeron %d bytes del archivo\n", CHUNK, length_read);
+		/* Lanzo timer por timeout */
+//		printf("Refresco alarma\n");
+		alarm(3);
+
+
+		// El programa se "clava" 
+		if ((total_sent_packets % 700 == 0) && (total_sent_packets > 0)) {
+//			printf("Nro_retry_congelado %d\n", nro_retry_congelado);
+			if (nro_retry_congelado == 0) {
+				printf("El programa se congela\n");
+				nro_retry_congelado = 1;
+				pause();
+				//for(;;);
+			} else {
+				nro_retry_congelado = 0;
+			}
+		}
+
 
 		/* preparo buffer donde envio dato */
 		memcpy((void *) buffer_sent, (void *) dest_mac, ETH_MAC_LEN);
@@ -209,9 +248,9 @@ int main(int argc, char *argv[])
 		/* Numero de secuencia */
 		data[0] = nro_secuencia;
 		/* Contenido del chunk del archivo */
-//		printf("Marca LENGTH: %d\n", length_read);
+//      printf("Marca LENGTH: %d\n", length_read);
 		memcpy((void *) (data + 1), (void *) buffer_read, length_read);
-//		printf("BufferSENT: %s\n", (char *) buffer_sent);
+//      printf("BufferSENT: %s\n", (char *) buffer_sent);
 
 
 #ifdef DEBUG
@@ -226,12 +265,15 @@ int main(int argc, char *argv[])
 		printf("\nFin de DUMP\n");
 #endif
 
+//resend:
+
 		/*clear the timers: */
 		timerclear(&begin);
 		timerclear(&end);
 
 		/*get time before sending..... */
 		gettimeofday(&begin, NULL);
+
 
 		/* Envio paquete con pedazo de archivo */
 		length_sent =
@@ -242,28 +284,41 @@ int main(int argc, char *argv[])
 			perror("sendto():");
 			exit(1);
 		}
-//		printf("Enviado\n");
+//      printf("Enviado\n");
 
 		/* Espero por handshake de pedazo enviado */
 		while ((length_recv =
 				recvfrom(s, buffer_recv, BUF_SIZE, 0, NULL, NULL)) != -1) {
 
 			/*
-	         * Espero para recibir el paquete de ACK, que debe incluir:
-    	     * 1) Ethertype == 0x0
-        	 * 2) Direccion ethernet de destino == nuestra MAC
-	         * 3) Primer byte de datos == nro. de secuencia
-    	     */
-			if (eh_recv->h_proto == ETH_P_NULL
-				&& (length_recv == 15)
-				&& (memcmp ((const void *) eh_recv->h_dest, (const void *) src_mac, ETH_MAC_LEN) == 0)
-				&& (memcmp ((unsigned char *) (buffer_recv + 14), (const void *) &nro_secuencia, 1) == 0)
+			 * Espero para recibir el paquete de ACK, que debe incluir:
+			 * 1) Ethertype == 0x0
+			 * 2) Direccion ethernet de destino == nuestra MAC
+			 * 3) Primer byte de datos == nro. de secuencia
+			 */
+			if (eh_recv->h_proto == ETH_P_NULL && (length_recv == 15)
+				&&
+				(memcmp
+				 ((const void *) eh_recv->h_dest, (const void *) src_mac,
+				  ETH_MAC_LEN) == 0)
+				&&
+				(memcmp
+				 ((unsigned char *) (buffer_recv + 14),
+				  (const void *) &nro_secuencia, 1) == 0)
 				) {
+
+
+//printf("Reseteo alarma\n");
+alarm(0);
 
 //#ifdef DEBUG
 				unsigned char *data_recv = buffer_recv + 14;	/*Userdata in ethernet frame */
-				printf("Nro. secuencia local: %u. Nro. secuencia ACK: %d. Largo: %d\n",
-					   nro_secuencia, (unsigned int) *(data_recv), length_recv);
+/*
+				printf
+					("Nro. secuencia local: %u. Nro. secuencia ACK: %d. Largo: %d\n",
+					 nro_secuencia, (unsigned int) *(data_recv),
+					 length_recv);
+*/
 
 #ifdef DEBUG
 				printf("\nDUMP handshake received\n");
@@ -272,6 +327,9 @@ int main(int argc, char *argv[])
 				printf("\nFin de DUMP\n");
 #endif
 
+				/* Chequea si el nro. de secuencia es igual al anterior */
+
+
 				/*get time after sending..... */
 				gettimeofday(&end, NULL);
 				/*...and calculate difference......... */
@@ -279,20 +337,27 @@ int main(int argc, char *argv[])
 
 				allovertime +=
 					((result.tv_sec * 1000000) + result.tv_usec);
+
+				nro_secuencia++;
 				break;
 			}
 		}
 
 		total_sent_packets++;
-		nro_secuencia++;
+
+		if ((total_file_read % CHUNK) != 0)
+			printf("Tamaño leído del archivo es %ld, que no es múltiplo de %d\n", total_file_read, CHUNK);
+	
+
 		memset(buffer_read, 0x0, BUF_SIZE);
 		memset(buffer_sent, 0x0, BUF_SIZE);
 		memset(buffer_recv, 0x0, BUF_SIZE);
-	}
+	} //while ((length_read = read(filefd, buffer_read, CHUNK)) > 0) {
 
 //  printf("Sending %i bytes takes %lld microseconds in average\n", i, allovertime / NUMBER_OF_MESUREMENTS_PER_AMOUNT_OF_DATA);
 
-	printf("Totally sent: %ld packets\n", total_sent_packets);
+	printf("Totally sent: %ld packets. Cant timeouts %lu\n",
+		   total_sent_packets, timeout_count);
 	return (0);
 }
 
@@ -315,7 +380,8 @@ void sigint(int signum)
 
 	printf("Client terminating....\n");
 
-	printf("Totally sent: %ld packets\n", total_sent_packets);
+	printf("Totally sent: %ld packets. Cant timeouts %lu\n",
+		   total_sent_packets, timeout_count);
 	exit(0);
 }
 
@@ -326,12 +392,19 @@ void usage(char *argv0)
 	exit(EXIT_SUCCESS);
 }
 
-void error(char *msg)
+
+void timeout_func(int signo)
 {
-	if (errno == 0) {
-		fprintf(stderr, msg);
-	} else {
-		perror(msg);
-	}
-	exit(0);
+//        char msg[101];
+
+//        exit(0);
+//      goto resend;
+    timeout_count++;
+    printf("Llego SIGARLM. timeout_count %ld, filefd %d, total_file_read %ld\n", timeout_count, filefd, total_file_read);
+    if (lseek(filefd, total_file_read, SEEK_SET) < 0) {
+        printf("No se pudo reposicionar archivo\n");
+        exit(0);
+    }
+    return;
 }
+
