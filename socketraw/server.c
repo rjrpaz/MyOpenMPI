@@ -1,6 +1,3 @@
-#include "server.h"
-#include "util.h"
-
 #include <sys/socket.h>
 #include <sys/ioctl.h>
 #include <sys/time.h>
@@ -26,99 +23,126 @@
 
 #include <netinet/in.h>
 
+#include "common.h"
+
 //#define DEBUG 1
 #undef DEBUG
 
 #define BUF_SIZE ETH_FRAME_TOTALLEN
 
-void timeout_func(int);
+#define TIMEOUT 500000
+//#define TIMEOUT 0
+#define LIMITE_REINTENTOS 1000
 
-int s = 0, filefd = 0;			/*Socketdescriptor */
-//void *buffer = NULL;
+//void timeout_func(int);
+void sigint(int signum);
+
+int s = 0, filefd = 0;
 long total_packets = 0;
 long answered_packets = 0;
 
-void error(char *);
+int send_ack(unsigned char *etherhead, unsigned char src_mac[6], unsigned char nro_secuencia);
 
-void *buffer_sent;
 struct sockaddr_ll socket_address;
 
 int main(void)
 {
+	/* Variable asociadas al paquete ENTRANTE */
+
+	/* buffer que contiene paquete enviado por red */
 	void *buffer_recv = NULL;
-	buffer_recv = (void *) malloc(BUF_SIZE);	/*Buffer for Ethernet Frame */
-	unsigned char *etherhead = buffer_recv;	/*Pointer to Ethenet Header */
-	struct ethhdr *eh = (struct ethhdr *) etherhead;	/*Another pointer to ethernet header */
+	buffer_recv = (void *) malloc(BUF_SIZE);
+
+	/* Puntero a la cabecera ethernet del paquete RECIBIDO */
+	unsigned char *etherhead = buffer_recv;
+
+	/* Puntero a la seccion de datos en el paquete SR */
 	unsigned char *data;
 
-	unsigned char src_mac[6];	/*our MAC address */
+	/* Puntero a la estructura que almacena la información de la cabecera ethernet del paquete RECIBIDO */
+	struct ethhdr *eh = (struct ethhdr *) etherhead;
 
-	unsigned char nro_secuencia = 255, nro_secuencia_ant = 255;
+	/* 6 bytes con la dirección ethernet ORIGEN en el paquete de ACK enviado */
+	unsigned char src_mac[6];
+
+	int nonblock = 1;
 
 
-	buffer_sent = NULL;
-	buffer_sent = (void *) malloc(BUF_SIZE);	/*Buffer for Ethernet Frame */
-	unsigned char *etherhead_sent = buffer_sent;	/*Pointer to Ethenet Header */
-	struct ethhdr *eh_sent = (struct ethhdr *) etherhead_sent;	/*Another pointer to ethernet header */
-
+	/* Variables para almacenar nuestra propia dirección ethernet */
 	struct ifreq ifr;
-	int ifindex = 0;			/*Ethernet Interface index */
-	int i;
+	/* Indice de la interfaz Ethernet local */
+	int ifindex = 0;
+
+
+	/* Variable asociadas al paquete SALIENTE */
+
+	/* buffer que contiene paquete enviado */
+	//void *buffer_sent = NULL;
+	//buffer_sent = (void *) malloc(BUF_SIZE);
+
+	/* Puntero a la cabecera ethernet del paquete ENVIADO */
+	//unsigned char *etherhead_sent = buffer_sent;
+
+	/* Puntero a la estructura que almacena la información de la cabecera ethernet del paquete ENVIADO */
+	//struct ethhdr *eh_sent = (struct ethhdr *) etherhead_sent;
+
+
+
+	// REVISAR
 	int length;					/*length of received packet */
 	int sent;
 	char path[BUF_SIZE];
+	unsigned char nro_secuencia = 0xEF, nro_secuencia_ant = 0xEF;
 
 	void *buffer_write = NULL;
 	buffer_write = (void *) malloc(BUF_SIZE);	/*Buffer for Ethernet Frame */
 
-	unsigned short int escribir_archivo = 0;
-	unsigned char anterior = 255, nuevo = 255;
+	unsigned short int escribir_archivo = 0, primer_paquete = 1;
+	unsigned char anterior = 0xEF, nuevo = 0xEF;
 
-	printf("Server started, entering initialiation phase...\n");
-	printf("SIZE: %d\n", BUF_SIZE);
+	/* Variables asociada a las pruebas de retry */
+	int i;
+	fd_set rfds;
+	struct timeval tv;
+	int retval, cantidad_de_reintentos = 0;
+
+	/* COMIENZO DEL PROGRAMA */
+	printf("Arrancando servidor\n");
 
     /* Lanzo timer por timeout */
-    signal(SIGALRM, timeout_func);
+//    signal(SIGALRM, timeout_func);
 
 
-//  printf("TAMANIO DATO: %d\n", sizeof(nro_secuencia));
-	/*open socket */
+	/* abre socket raw */
 	s = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
-	if (s == -1) {
-		perror("socket():");
-		exit(1);
-	}
-#ifdef DEBUG
-	printf("Successfully opened socket: %i\n", s);
-#endif
+	if (s == -1)
+		error("socket():");
 
-	/*retrieve ethernet interface index */
+	/* Configuro el socket como non-block */
+	if (ioctl(s, FIONBIO, (char *)&nonblock) < 0)
+		error("ioctl()");
+
+	/* obtiene índice de la interfaz ethernet */
 	strncpy(ifr.ifr_name, DEVICE, IFNAMSIZ);
-	if (ioctl(s, SIOCGIFINDEX, &ifr) == -1) {
-		perror("SIOCGIFINDEX");
-		exit(1);
-	}
+	if (ioctl(s, SIOCGIFINDEX, &ifr) == -1)
+		error("SIOCGIFINDEX");
 	ifindex = ifr.ifr_ifindex;
-#ifdef DEBUG
-	printf("Successfully got interface index: %i\n", ifindex);
-#endif
 
-	/*retrieve corresponding MAC */
-	if (ioctl(s, SIOCGIFHWADDR, &ifr) == -1) {
-		perror("SIOCGIFINDEX");
-		exit(1);
-	}
+	/* obtiene la MAC address de la interfaz */
+	if (ioctl(s, SIOCGIFHWADDR, &ifr) == -1)
+		error("SIOCGIFINDEX");
+
+	/* almacena la información de nuestra propia MAC address en los bytes correspondientes */
 	for (i = 0; i < 6; i++) {
 		src_mac[i] = ifr.ifr_hwaddr.sa_data[i];
 	}
-#ifdef DEBUG
+
 	printf
-		("Successfully got our MAC address: %02X:%02X:%02X:%02X:%02X:%02X\n",
+		("MAC address local: %02X:%02X:%02X:%02X:%02X:%02X\n",
 		 src_mac[0], src_mac[1], src_mac[2], src_mac[3], src_mac[4],
 		 src_mac[5]);
-#endif
 
-	/*prepare sockaddr_ll */
+	/* Crea la estructura de dirección para el Socket Raw */
 	socket_address.sll_family = PF_PACKET;
 	socket_address.sll_protocol = htons(ETH_P_IP);
 	socket_address.sll_ifindex = ifindex;
@@ -128,128 +152,146 @@ int main(void)
 	socket_address.sll_addr[6] = 0x00;
 	socket_address.sll_addr[7] = 0x00;
 
-
-	/*establish signal handler */
+	/* Defino función para salida por interrupción del programa */
 	signal(SIGINT, sigint);
-#ifdef DEBUG
-	printf("Successfully established signal handler for SIGINT\n");
-#endif
 
+/*
 	sprintf(path, "/tmp/server.file");
 	if ((filefd = (open(path, O_WRONLY | O_CREAT | O_TRUNC))) < 0) {
 		error("Error al intentar leer archivo local.\n");
 	}
-#ifdef DEBUG
+*/
+
 	printf
-		("We are in production state, waiting for incoming packets....\n");
-#endif
+		("Esperando paquetes entrantes\n");
 
 	while (1) {
-		alarm(3);
-		/*Wait for incoming packet... */
-		length = recvfrom(s, buffer_recv, BUF_SIZE, 0, NULL, NULL);
-		if (length == -1) {
-			perror("recvfrom():");
-			exit(1);
-		}
-		escribir_archivo = 0;
+		/* Espero paquete entrante */
+		FD_ZERO(&rfds);
+		FD_SET(s, &rfds);
 
-		/*See if we should answer (Ethertype == 0x0 && destination address == our MAC) */
-		if (eh->h_proto == ETH_P_NULL
-			&& memcmp((const void *) eh->h_dest, (const void *) src_mac,
-					  ETH_MAC_LEN) == 0) {
+		/* Establece timeout */
+		tv.tv_sec = 0;
+		tv.tv_usec = TIMEOUT;
 
-			data = buffer_recv + 14;
-			nro_secuencia = (unsigned char) *data;
+		retval = select(s+1, &rfds, NULL, NULL, &tv);
+		//retval = select(s+1, &rfds, NULL, NULL, NULL);
+
+		if (retval == -1)
+			error("select()");
+		else if (retval) {
+			//printf("Se detectó paquete entrante antes del timeout\n");
+			/* Recupero dato leído */
+			length = recvfrom(s, buffer_recv, BUF_SIZE, 0, NULL, NULL);
+			if (length == -1)
+				error("recvfrom():");
 
 			/*
-			 * Copio nro de secuencia para ACK.
-			 * Si recibí el nro. de secuencia que esperaba, mando el ACK
-			 * con ese número.
-			 * Si recibo otra cosa, puedo suponer que se perdió un paquete
-			 * asi que pido nuevamente el anterior.
+			 * Compruebo si el dato recibido se corresponde a un socket raw
+			 * 1) Ethertype == 0x0
+			 * 2) Direccion ethernet de destino == nuestra MAC
+			 * 3) Primer byte de datos == nro. de secuencia
 			 */
-//          printf("Nro. secuencia: 0x%X ant: 0x%X\n", (unsigned char) nro_secuencia, (unsigned char) (nro_secuencia_ant + 1));
-			nuevo = (unsigned int) nro_secuencia;
-			printf("%u %u\n", (unsigned char) nuevo, anterior);
-//          if (((unsigned char)(nro_secuencia) == (unsigned char) (nro_secuencia_ant+1)) || (nro_secuencia == 0 && nro_secuencia_ant == 255)) {
-			if ((nuevo == (anterior + 1))
-				|| (nuevo == 0 && anterior == 255)) {
-//          printf("Nro. secuencia ant: %u\n", (unsigned char) nro_secuencia_ant);
-				memcpy((void *) (buffer_sent + 14),
-					   (const void *) &nro_secuencia, 1);
-				escribir_archivo = 1;
-			} else {
-//              printf("Nro. secuencia ant: %u\n", (unsigned char) nro_secuencia_ant);
-//              printf("Nuevo: %u Anterior %u\n", (unsigned char) nuevo, anterior);
-				memcpy((void *) (buffer_sent + 14),
-					   (const void *) &nro_secuencia_ant, 1);
-			}
+			if (eh->h_proto == ETH_P_NULL
+				&& memcmp((const void *) eh->h_dest, (const void *) src_mac,
+						  ETH_MAC_LEN) == 0) {
 
-//#ifdef DEBUG
-			if (nuevo == 0xbf) {
-//          unsigned char *data = buffer_recv + 14;
-				printf("Nro. secuencia: %d. Largo: %d\n",
-//                 (unsigned int) *(data), length);
-					   (unsigned int) nro_secuencia, length);
-//#ifdef DEBUG
-				printf("\nDUMP buffer_recv\n");
-				for (i = 0; i < length; i++)
-					printf("%02X ", *(unsigned char *) (buffer_recv + i));
-				printf("\nFin de DUMP\n");
-			}
-//#endif
-
-			/*exchange addresses in buffer */
-			memcpy((void *) etherhead_sent,
-				   (const void *) (etherhead + ETH_MAC_LEN), ETH_MAC_LEN);
-			memcpy((void *) (etherhead_sent + ETH_MAC_LEN),
-				   (const void *) src_mac, ETH_MAC_LEN);
-
-			memcpy((void *) (buffer_sent + 14),
-				   (const void *) (buffer_recv + 14), 1);
-
-			/*prepare sockaddr_ll */
-			socket_address.sll_addr[0] = eh_sent->h_dest[0];
-			socket_address.sll_addr[1] = eh_sent->h_dest[1];
-			socket_address.sll_addr[2] = eh_sent->h_dest[2];
-			socket_address.sll_addr[3] = eh_sent->h_dest[3];
-			socket_address.sll_addr[4] = eh_sent->h_dest[4];
-			socket_address.sll_addr[5] = eh_sent->h_dest[5];
-
-			/* ACK, devuelve nro. de secuencia */
-//          sent = sendto(s, buffer, length, 0, (struct sockaddr*)&socket_address, sizeof(socket_address));
-			sent =
-				sendto(s, buffer_sent, 15, 0,
-					   (struct sockaddr *) &socket_address,
-					   sizeof(socket_address));
-			if (sent == -1) {
-				perror("sendto():");
-				exit(1);
-			}
 #ifdef DEBUG
-			printf("\nDUMP buffer_sent\n");
-			for (i = 0; i < 20; i++)
-				printf("%02X ", *(unsigned char *) (buffer_sent + i));
-			printf("\nFin de DUMP\n");
+				printf("Se detectó paquete socket raw\n");
 #endif
 
+				data = buffer_recv + ETH_HEADER_LEN;
+				nro_secuencia = (unsigned char) *data;
 
-//          printf("Escribir archivo: %d\n", escribir_archivo);
-			if (escribir_archivo == 1) {
-				memcpy((void *) buffer_write, (void *) (buffer_recv + 15),
-					   length - 15);
-				write(filefd, buffer_write, length - 15);
-//          sync();
-				nro_secuencia_ant = nro_secuencia;
-				anterior = nuevo;
+				/*
+				 * Copio nro de secuencia para ACK.
+				 * Si recibí el nro. de secuencia que esperaba, mando el ACK
+				 * con ese número.
+				 * Si recibo otra cosa, puedo suponer que se perdió un paquete
+				 * asi que pido nuevamente el anterior.
+				 */
+				nuevo = (unsigned int) nro_secuencia;
+
+//				printf("%u %u\n", (unsigned char) nuevo, anterior);
+//         		if (((unsigned char)(nro_secuencia) == (unsigned char) (nro_secuencia_ant+1)) || (nro_secuencia == 0 && nro_secuencia_ant == 255)) {
+
+				escribir_archivo = 0;
+//				printf("Nro. secuencia ant: %u\n", (unsigned char) nro_secuencia_ant);
+
+
+				/* Nombre del archivo */
+				if (nuevo == 0xFF) {
+					memcpy((void *) buffer_write, (void *) (buffer_recv + ETH_HEADER_LEN + RAW_HEADER_LEN), length - ETH_HEADER_LEN - RAW_HEADER_LEN);
+//					printf("Se va a recibir archivo de nombre %s\n", (char *) buffer_write);
+					sprintf(path, "/tmp/%s", (char *) buffer_write);
+					printf("Recibiendo archivo %s\n", path);
+					if ((filefd = (open(path, O_WRONLY | O_CREAT | O_TRUNC))) < 0) {
+						error("Error al intentar leer archivo local.\n");
+					}
+					escribir_archivo = 0;
+					//nro_secuencia_ant = 0xEF;
+					anterior = 0xEF;
+				/* EOF */
+				} else if (nuevo == 0xFE) {
+					close (filefd);
+					printf("Archivo %s fue recibido completamente\n", path);
+					primer_paquete = 0;
+					escribir_archivo = 0;
+				/* Contenido del archivo */
+				} else {
+
+					if ((nuevo == (anterior + 1)) || (nuevo == 0 && anterior == 0xEF)) {
+						/* Escribo en archivo */
+						memcpy((void *) buffer_write, (void *) (buffer_recv + ETH_HEADER_LEN + RAW_HEADER_LEN), length - ETH_HEADER_LEN - RAW_HEADER_LEN);
+						write(filefd, buffer_write, length - ETH_HEADER_LEN - RAW_HEADER_LEN);
+						escribir_archivo = 1;
+					}
+
+/*
+#ifdef DEBUG
+					printf("\nDUMP buffer_recv\n");
+					for (i = 0; i < length; i++)
+						printf("%02X ", *(unsigned char *) (buffer_recv + i));
+					printf("\nFin de DUMP\n");
+#endif
+*/
+					primer_paquete = 0;
+				}
+				sent = send_ack(etherhead, src_mac, nro_secuencia);
+				if (sent == -1)
+					error("send_ack():");
+
+				if (escribir_archivo == 1) {
+					nro_secuencia_ant = nro_secuencia;
+					anterior = nuevo;
+				}
+				answered_packets++;
+			} /* if (eh->h_proto == ETH_P_NULL && memcmp((const void *) eh->h_dest, (const void *) src_mac, ETH_MAC_LEN) == 0) { */
+
+			total_packets++;
+
+
+		/* Timeout en la espera por un paquete entrante */
+		} else {
+			//printf("Timeout para paquete entrante\n");
+			if (!primer_paquete) {
+				sent = send_ack(etherhead, src_mac, nro_secuencia);
+				if (sent == -1)
+					error("send_ack():");
 			}
+		} /* if (retval) */
 
-			answered_packets++;
+		cantidad_de_reintentos++;
+		if (cantidad_de_reintentos > LIMITE_REINTENTOS) {
+//			printf("Llegó al límite de reintentos\n");
+			if (!primer_paquete) {
+				sent = send_ack(etherhead, src_mac, nro_secuencia);
+				if (sent == -1)
+					error("send_ack():");
+			}
+			cantidad_de_reintentos=0;
 		}
-
-		total_packets++;
-	}
+	} /* while(1) */
 }
 
 void sigint(int signum)
@@ -277,17 +319,8 @@ void sigint(int signum)
 	exit(0);
 }
 
-void error(char *msg)
-{
-	if (errno == 0) {
-		fprintf(stderr, msg);
-	} else {
-		perror(msg);
-	}
-	exit(0);
-}
 
-
+#if 0
 void timeout_func(int signo)
 {
 	int sent = 0;
@@ -301,7 +334,7 @@ void timeout_func(int signo)
     }
 */
 	// Reenvío el ACK
-	sent = sendto(s, buffer_sent, 15, 0, (struct sockaddr *) &socket_address, sizeof(socket_address));
+	sent = sendto(s, buffer_sent, ETH_HEADER_LEN + RAW_HEADER_LEN, 0, (struct sockaddr *) &socket_address, sizeof(socket_address));
 	if (sent == -1) {
 		perror("sendto():");
 		exit(1);
@@ -310,3 +343,56 @@ void timeout_func(int signo)
     return;
 }
 
+*/
+#endif
+
+
+
+int send_ack(unsigned char *etherhead, unsigned char src_mac[6], unsigned char nro_secuencia) {
+	int sent;
+
+//	printf("Enviado ACK para nro. de secuencia %u\n", nro_secuencia);
+
+	/* buffer que contiene paquete enviado */
+	void *buffer_sent = NULL;
+	buffer_sent = (void *) malloc(BUF_SIZE);
+
+	/* Puntero a la cabecera ethernet del paquete ENVIADO */
+	unsigned char *etherhead_sent = buffer_sent;
+
+	/* Puntero a la estructura que almacena la información de la cabecera ethernet del paquete ENVIADO */
+	struct ethhdr *eh_sent = (struct ethhdr *) etherhead_sent;
+
+	/* intercambio direcciones MAC origen y destinos para el paquete de ACK */
+	memcpy((void *) etherhead_sent, (const void *) (etherhead + ETH_MAC_LEN), ETH_MAC_LEN);
+	memcpy((void *) (etherhead_sent + ETH_MAC_LEN), (const void *) src_mac, ETH_MAC_LEN);
+
+	memcpy((void *) (buffer_sent + ETH_HEADER_LEN), (const void *) &nro_secuencia, 1);
+
+	// DEBUGGING
+	char serverID = 'S';
+	memcpy((void *) (buffer_sent + ETH_HEADER_LEN + 1), (const void *) &serverID, 1);
+
+	/*prepare sockaddr_ll */
+	socket_address.sll_addr[0] = eh_sent->h_dest[0];
+	socket_address.sll_addr[1] = eh_sent->h_dest[1];
+	socket_address.sll_addr[2] = eh_sent->h_dest[2];
+	socket_address.sll_addr[3] = eh_sent->h_dest[3];
+	socket_address.sll_addr[4] = eh_sent->h_dest[4];
+	socket_address.sll_addr[5] = eh_sent->h_dest[5];
+
+//	sent = sendto(s, buffer, length, 0, (struct sockaddr*)&socket_address, sizeof(socket_address));
+	sent = sendto(s, buffer_sent, ETH_HEADER_LEN + RAW_HEADER_LEN, 0,
+	   (struct sockaddr *) &socket_address,
+	   sizeof(socket_address));
+
+
+#ifdef DEBUG
+	printf("\nDUMP buffer_sent\n");
+	for (i = 0; i < 20; i++)
+		printf("%02X ", *(unsigned char *) (buffer_sent + i));
+	printf("\nFin de DUMP\n");
+#endif
+
+	return sent;
+}

@@ -3,12 +3,11 @@ CFLAGS=-Wall -O2
 
 all: client server
 
-client: client.c functions.c
-#	gcc ${CFLAGS} -o client client.c functions.c
-	gcc ${CFLAGS} -o client client.c
+client: client.c common.c
+	gcc ${CFLAGS} -o client client.c common.c
 
-server: server.c
-	gcc ${CFLAGS} -o server server.c
+server: server.c common.c
+	gcc ${CFLAGS} -o server server.c common.c
 
 indent:
 	indent -ts 4 -kr *.c
