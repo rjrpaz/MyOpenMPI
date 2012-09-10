@@ -35,8 +35,23 @@
 
 // Timeout en segundos
 //#define TIMEOUT 3
+
+/*
+ * Posibles causas para retransmitir un paquete:
+ *
+ * 1) Timeout en la espera de un ACK.
+ */
 #define TIMEOUT 500000
+/*
+ * 2) Se recibió una cantidad de paquetes por la interfaz,
+ * no llegan paquetes Socket Raw.
+ */
 #define LIMITE_REINTENTOS 100
+/*
+ * 3) Se recibió una cantidad de paquetes de Socket Raw, y
+ * el ACK no es el esperado.
+ */
+#define LIMITE_PAQUETES_ENTRANTES 1000
 
 void sigint(int);
 void usage(char *);
@@ -143,6 +158,12 @@ int main(int argc, char *argv[])
 
 	/* Variable asociada a las pruebas de retry */
 	int nro_retry_congelado = 0, seguir_esperando_ack = 1, leer_siguiente_chunk = 1, cantidad_de_reintentos = 0;
+	/*
+	 * Almacena la cantidad de paquetes entrantes
+	 * desde el último paquete socket raw detectado.
+	 */
+	int cantidad_paquetes_entrantes = 0;
+
 	int i;
 	fd_set fds;
 	struct timeval tv;
@@ -272,24 +293,6 @@ int main(int argc, char *argv[])
 		}
 
 
-/* Lanzo timer por timeout */
-//alarm(TIMEOUT);
-
-		// El programa se "clava" 
-/*
-		if ((total_sent_packets % 700 == 0) && (total_sent_packets > 0)) {
-//			printf("Nro_retry_congelado %d\n", nro_retry_congelado);
-			if (nro_retry_congelado == 0) {
-				printf("El programa se congela\n");
-				nro_retry_congelado = 1;
-				pause();
-				//for(;;);
-			} else {
-				nro_retry_congelado = 0;
-			}
-		}
-*/
-
 		/* preparo buffer donde envio dato */
 		memcpy((void *) buffer_sent, (void *) dest_mac, ETH_MAC_LEN);
 
@@ -357,14 +360,6 @@ int main(int argc, char *argv[])
 #ifdef DEBUG
 		printf("Enviando porción con nro. de secuencia %d\n", nro_secuencia_enviado);
 #endif
-/*
-		do {
-			;
-		} while ((retval = select(s+1, NULL, &fds, NULL, NULL)) == 0);
-
-		if (retval < 0)
-			error("select(): ");
-*/
 		length_sent =
 			sendto(s, buffer_sent, ETH_HEADER_LEN + RAW_HEADER_LEN + length_read, 0,
 				   (struct sockaddr *) &socket_address,
@@ -393,6 +388,7 @@ int main(int argc, char *argv[])
 			if (retval == -1) {
 				error("select()");
 			} else if (retval) {
+				cantidad_paquetes_entrantes++;
 				/* Recupero dato leído */
 				length_recv = recvfrom(s, buffer_recv, BUF_SIZE, 0, NULL, NULL);
 				if (length_recv == -1)
@@ -481,18 +477,25 @@ int main(int argc, char *argv[])
 //							seguir_esperando_ack = 0;
 						}
 					} /* if ((nro_secuencia_recibido == 0xFF) && (paso == 0)) { */
+					cantidad_paquetes_entrantes = 0;
 
 				/* el paquete recibido no es ACK */
 				} else {
-					cantidad_de_reintentos++;
-					if (cantidad_de_reintentos > LIMITE_REINTENTOS)
+					if (cantidad_paquetes_entrantes > LIMITE_PAQUETES_ENTRANTES) {
 						leer_siguiente_chunk = 0;
-					else
-						seguir_esperando_ack = 1;
+						seguir_esperando_ack = 0;
+					} else {
+						cantidad_de_reintentos++;
+						if (cantidad_de_reintentos > LIMITE_REINTENTOS)
+							leer_siguiente_chunk = 0;
+						else
+							seguir_esperando_ack = 1;
+					}
 				}
 
 			/* Timeout en la espera por un paquete entrante */
 			} else {
+				printf("Timeout en la espera por un paquete entrante\n");
 				leer_siguiente_chunk = 0;
 // El siguiente genera pesadez ?
 				seguir_esperando_ack = 0;
