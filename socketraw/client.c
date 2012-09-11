@@ -91,11 +91,13 @@ int main(int argc, char *argv[])
 
 	/* 6 bytes con la dirección ethernet DESTINO en el paquete enviado - estática */
 	// Consulfem
-	unsigned char dest_mac[6] = {0x00, 0x19, 0xD1, 0x99, 0x79, 0xB6};
+	//unsigned char dest_mac[6] = {0x00, 0x19, 0xD1, 0x99, 0x79, 0xB6};
 	// Casa wlan0
 	// unsigned char dest_mac[6] = {0x00, 0x22, 0x43, 0x0d, 0x5c, 0x4b};
 	// Documentacion
-	//unsigned char dest_mac[6] = {0x00, 0x0D, 0x87, 0xB8, 0x97, 0x56 };
+	unsigned char dest_mac[6] = {0x00, 0x0D, 0x87, 0xB8, 0x97, 0x56};
+	// Boxhost
+	// unsigned char dest_mac[6] = {0x00, 0x08, 0xA1, 0x74, 0x02, 0xa8};
 
 	/* largo de paquete enviado */
 	int length_sent = 0;
@@ -163,6 +165,13 @@ int main(int argc, char *argv[])
 	 * desde el último paquete socket raw detectado.
 	 */
 	int cantidad_paquetes_entrantes = 0;
+
+	/*
+	 * Buffer nulo, para realizar comparaciones
+	 */
+	void *null_buffer = NULL;
+	null_buffer = malloc(BUF_SIZE);
+	memset(null_buffer, 0x0, BUF_SIZE);
 
 	int i;
 	fd_set fds;
@@ -248,9 +257,10 @@ int main(int argc, char *argv[])
 
 
 	/* Defino conjunto de file descriptors a monitorear con select() */
+/*
 	FD_ZERO(&fds);
 	FD_SET(s, &fds);
-
+*/
 	/* Abro archivo */
 	if ((filefd = (open(path, O_RDONLY))) < 0)
 		error("Error al intentar leer archivo local.\n");
@@ -374,8 +384,8 @@ int main(int argc, char *argv[])
 
 		while (seguir_esperando_ack) {
 			/* Espero respuesta del servidor (handshake del nro de secuencia) */
-			//FD_ZERO(&fds);
-			//FD_SET(s, &fds);
+			FD_ZERO(&fds);
+			FD_SET(s, &fds);
 
 			/* Establece timeout */
 			tv.tv_sec = 0;
@@ -402,7 +412,12 @@ int main(int argc, char *argv[])
 				 * 2) Direccion ethernet de destino == nuestra MAC
 				 * 3) Primer y único byte de datos == nro. de secuencia
 				 */
-				if (eh_recv->h_proto == ETH_P_NULL && (length_recv == (ETH_HEADER_LEN + RAW_HEADER_LEN))
+				//if (eh_recv->h_proto == ETH_P_NULL && (length_recv == (ETH_HEADER_LEN + RAW_HEADER_LEN))
+				if (eh_recv->h_proto == ETH_P_NULL && (length_recv == ETH_MIN_LEN)
+					&&
+					(memcmp
+					 ((const void *) (buffer_recv + ETH_HEADER_LEN + RAW_HEADER_LEN), (const void *) null_buffer,
+					  (ETH_MIN_LEN - (ETH_HEADER_LEN + RAW_HEADER_LEN))) == 0)
 					&&
 					(memcmp
 					 ((const void *) eh_recv->h_dest, (const void *) src_mac,
@@ -440,9 +455,8 @@ int main(int argc, char *argv[])
 					} else {
 
 						if (nro_secuencia_recibido == nro_secuencia_enviado) {
-							printf("Llegó ACK ordenado, para paquete con nro. de secuencia %u\n", nro_secuencia_enviado);
 #ifdef DEBUG
-							printf("Recibido ACK para nro. de secuencia %u\n", nro_secuencia_recibido);
+							printf("Recibido ACK ordenado, para nro. de secuencia %u\n", nro_secuencia_enviado);
 							printf("\nDUMP handshake received\n");
 							for (i = 0; i < (ETH_HEADER_LEN + RAW_HEADER_LEN); i++)
 								printf("%02X ", *(unsigned char *) (buffer_recv + i));
@@ -471,7 +485,9 @@ int main(int argc, char *argv[])
 
 						/* nro_secuencia_recibido != nro_secuencia_enviado */
 						} else {
+#ifdef DEBUG
 							printf("Llegó ACK desordenado. Enviado paquete con nro. de secuencia %u, y recibido ACK para nro. de secuencia %u. Reenvío último chunk.\n", nro_secuencia_enviado, nro_secuencia_recibido);
+#endif
 							leer_siguiente_chunk = 0;
 // El siguiente genera pesadez
 //							seguir_esperando_ack = 0;
@@ -481,6 +497,22 @@ int main(int argc, char *argv[])
 
 				/* el paquete recibido no es ACK */
 				} else {
+/*
+					if (eh_recv->h_proto == ETH_P_NULL) {
+						printf("Parece un ACK\n");
+						printf("Largo recibido: %d Largo esperado: %d\n", length_recv, (ETH_HEADER_LEN + RAW_HEADER_LEN));
+					}
+*/
+/*
+					printf("\nDUMP dirección destino\n");
+					for (i = 0; i < (ETH_MAC_LEN); i++)
+						printf("%02X ", *(unsigned char *) (eh_recv->h_dest + i));
+					printf("\nFin de DUMP\n");
+					printf("\nDUMP src mac\n");
+					for (i = 0; i < (ETH_MAC_LEN); i++)
+						printf("%02X ", *(unsigned char *) (src_mac + i));
+					printf("\nFin de DUMP\n");
+*/
 					if (cantidad_paquetes_entrantes > LIMITE_PAQUETES_ENTRANTES) {
 						leer_siguiente_chunk = 0;
 						seguir_esperando_ack = 0;

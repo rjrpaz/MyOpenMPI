@@ -142,6 +142,7 @@ int main(void)
 		 src_mac[0], src_mac[1], src_mac[2], src_mac[3], src_mac[4],
 		 src_mac[5]);
 
+
 	/* Crea la estructura de dirección para el Socket Raw */
 	socket_address.sll_family = PF_PACKET;
 	socket_address.sll_protocol = htons(ETH_P_IP);
@@ -225,18 +226,24 @@ int main(void)
 //					printf("Se va a recibir archivo de nombre %s\n", (char *) buffer_write);
 					sprintf(path, "/tmp/%s", (char *) buffer_write);
 					printf("Recibiendo archivo %s\n", path);
-					if ((filefd = (open(path, O_WRONLY | O_CREAT | O_TRUNC))) < 0) {
-						error("Error al intentar leer archivo local.\n");
+					/* Abro archivo si no ha sido abierto */
+					if (filefd == 0) {
+						if ((filefd = (open(path, O_WRONLY | O_CREAT | O_TRUNC))) < 0) {
+							error("Error al intentar leer archivo local.\n");
+						}
 					}
 					escribir_archivo = 0;
 					//nro_secuencia_ant = 0xEF;
 					anterior = 0xEF;
 				/* EOF */
 				} else if (nuevo == 0xFE) {
-					close (filefd);
-					printf("Archivo %s fue recibido completamente\n", path);
+					if (filefd != 0) {
+						close (filefd);
+						printf("Archivo %s fue recibido completamente\n", path);
+					}
 					primer_paquete = 0;
 					escribir_archivo = 0;
+					filefd = 0;
 				/* Contenido del archivo */
 				} else {
 
@@ -382,7 +389,9 @@ int send_ack(unsigned char *etherhead, unsigned char src_mac[6], unsigned char n
 	socket_address.sll_addr[5] = eh_sent->h_dest[5];
 
 //	sent = sendto(s, buffer, length, 0, (struct sockaddr*)&socket_address, sizeof(socket_address));
-	sent = sendto(s, buffer_sent, ETH_HEADER_LEN + RAW_HEADER_LEN, 0,
+//	printf("Escribiendo %d bytes en el ACK\n", ETH_HEADER_LEN + RAW_HEADER_LEN);
+//	sent = sendto(s, buffer_sent, ETH_HEADER_LEN + RAW_HEADER_LEN, 0,
+	sent = sendto(s, buffer_sent, ETH_MIN_LEN, 0,
 	   (struct sockaddr *) &socket_address,
 	   sizeof(socket_address));
 
