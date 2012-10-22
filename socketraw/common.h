@@ -26,3 +26,5 @@ extern void warning(char *);
 // #define DEVICE             "wlan0"
 
 #define ETH_P_NULL	   0x0		/* we are running without any protocol above the Ethernet Layer*/
+
+#define CANT_CHUNKS 16
