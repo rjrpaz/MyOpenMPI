@@ -1,5 +1,6 @@
 extern void error(char *);
 extern void warning(char *);
+extern void dump_buffer(unsigned char *, int);
 
 /*
  *
@@ -26,5 +27,13 @@ extern void warning(char *);
 // #define DEVICE             "wlan0"
 
 #define ETH_P_NULL	   0x0		/* we are running without any protocol above the Ethernet Layer*/
+
+
+//#define BUFFER_SIZE ETH_FRAME_TOTALLEN
+#define BUFFER_SIZE 1517
+//#define CHUNK 1024
+// 1500 bytes - 2 cabecera propietaria
+//#define CHUNK ETH_FRAME_TOTALLEN-ETH_HEADER_LEN-RAW_HEADER_LEN
+#define CHUNK 1498
 
 #define CANT_CHUNKS 16

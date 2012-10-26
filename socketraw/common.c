@@ -19,3 +19,15 @@ void warning(char *msg)
 	return;
 }
 
+
+void dump_buffer(unsigned char *buffer, int size)
+{
+	int i = 0;
+//#ifdef DEBUG
+	printf("\nDUMP\n");
+	for (i = 0; i < size; i++)
+		printf("%02X ", *(unsigned char *) (buffer + i));
+	printf("\nFin de DUMP\n");
+//#endif
+}
+

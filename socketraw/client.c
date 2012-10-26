@@ -29,9 +29,7 @@
 //#define DEBUG 1
 #undef DEBUG
 
-#define CHUNK 1024
 //#define RETRY 3
-#define BUF_SIZE ETH_FRAME_TOTALLEN
 
 // Timeout en segundos
 //#define TIMEOUT 3
@@ -61,9 +59,6 @@ void usage(char *);
 void startOfTx(char *);
 void endOfTx(void);
 int esperar_ack(unsigned int);
-
-void dump_buffer(unsigned char *, int);
-
 
 int s = 0;						/*Socketdescriptor */
 
@@ -103,7 +98,7 @@ struct timeval tv;
 /* Buffer nulo, para fines comparativos */
 void *null_buffer = NULL;
 
-/* Variable asociadas al paquete SALIENTE */
+/* Variable asociadas al paquete ENTRANTE */
 
 /* buffer que contiene paquete recibido por red */
 void *buffer_recv = NULL;
@@ -112,7 +107,6 @@ void *buffer_recv = NULL;
 unsigned char *data_recv = NULL;
 
 /* Variables para archivo de log */
-FILE *logFile = NULL;
 unsigned int nro_chunk = 0;
 unsigned int cantidad_reenvios = 0;
 unsigned int cantidad_ack_otro = 0;
@@ -124,14 +118,15 @@ unsigned int cantidad_error = 0;
 int main(int argc, char *argv[])
 {
 	int nonblock = 1, retval = 0;
+//	FILE *logFile = NULL;
 
 	/* 6 bytes con la dirección ethernet DESTINO en el paquete enviado - estática */
 	// Consulfem
-	// unsigned char dest_mac[6] = {0x00, 0x19, 0xD1, 0x99, 0x79, 0xB6};
+	unsigned char dest_mac[6] = {0x00, 0x19, 0xD1, 0x99, 0x79, 0xB6};
 	// Casa wlan0
 	// unsigned char dest_mac[6] = {0x00, 0x22, 0x43, 0x0d, 0x5c, 0x4b};
 	// Documentacion
-	unsigned char dest_mac[6] = {0x00, 0x0D, 0x87, 0xB8, 0x97, 0x56};
+	// unsigned char dest_mac[6] = {0x00, 0x0D, 0x87, 0xB8, 0x97, 0x56};
 	// Boxhost
 	// unsigned char dest_mac[6] = {0x00, 0x08, 0xA1, 0x74, 0x02, 0xa8};
 
@@ -147,26 +142,26 @@ int main(int argc, char *argv[])
 	/* Variable asociadas al paquete ENTRANTE */
 
 	/* buffer que contiene paquete leido */
-	buffer_recv = (void *) malloc(BUF_SIZE);
+	buffer_recv = (void *) malloc(BUFFER_SIZE);
 
 	/* Puntero a la seccion de datos en el paquete RECIBIDO */
 	data_recv = buffer_recv + ETH_HEADER_LEN;
 
 	/* nombre del host servidor - SIN USO POR AHORA */
-	char host[BUF_SIZE];
+	char host[BUFFER_SIZE];
 
 
 	/* Variable asociadas al archivo a copiar */
 
 	/* buffer que contiene chunk de archivo leido */
 	void *buffer_read = NULL;
-	buffer_read = (void *) malloc(BUF_SIZE * CANT_CHUNKS);
+	buffer_read = (void *) malloc(BUFFER_SIZE * CANT_CHUNKS);
 
 	/* largo del chunk de archivo leído */
 	int length_read = 0;
 
 	/* path y nombre del archivo */
-	char path[BUF_SIZE], filename[BUF_SIZE];
+	char path[BUFFER_SIZE], filename[BUFFER_SIZE];
 	char *parse;
 
 
@@ -185,10 +180,10 @@ int main(int argc, char *argv[])
 	/*
 	 * Buffer nulo, para realizar comparaciones
 	 */
-	null_buffer = malloc(BUF_SIZE);
-	memset(null_buffer, 0x0, BUF_SIZE);
+	null_buffer = malloc(BUFFER_SIZE);
+	memset(null_buffer, 0x0, BUFFER_SIZE);
 
-	int i;
+	int i, largo_tramo = 0;
 
 	/* COMIENZO DEL PROGRAMA */
 	if (argc != 3)
@@ -197,7 +192,7 @@ int main(int argc, char *argv[])
 	sprintf(host, "%s", argv[1]);
 	sprintf(path, "%s", argv[2]);
 
-	parse = malloc(BUF_SIZE);
+	parse = malloc(BUFFER_SIZE);
 	sprintf(parse, "%s", path);
 	parse = strtok(parse, "/");
 	while (parse != NULL) {
@@ -209,7 +204,7 @@ int main(int argc, char *argv[])
 	printf("Cliente copiará archivo %s al host %s\n", filename, host);
 
 	/* Inicializo buffer para transmion */
-	buffer_sent = (void *) malloc(BUF_SIZE);
+	buffer_sent = (void *) malloc(BUFFER_SIZE);
 	etherhead = buffer_sent;
 	data = buffer_sent + ETH_HEADER_LEN;
 	eh = (struct ethhdr *) etherhead;
@@ -219,7 +214,7 @@ int main(int argc, char *argv[])
 	s = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
 	if (s == -1)
 		error("socket():");
-	printf("SOCKET File Descriptor: %d\n", s);
+//	printf("SOCKET File Descriptor: %d\n", s);
 
 	/* Configuro el socket como non-block */
 	if (ioctl(s, FIONBIO, (char *)&nonblock) < 0)
@@ -245,7 +240,7 @@ int main(int argc, char *argv[])
 		 src_mac[0], src_mac[1], src_mac[2], src_mac[3], src_mac[4],
 		 src_mac[5]);
 
-	printf("SOCKET ADDRESS: %p\n", &socket_address);
+//	printf("SOCKET ADDRESS: %p\n", &socket_address);
 
 	/* Crea la estructura de dirección para el Socket Raw */
 	socket_address.sll_family = PF_PACKET;
@@ -271,8 +266,8 @@ int main(int argc, char *argv[])
 
 	allovertime = 0;
 	nro_retry_congelado = 0;
-	//memset(buffer_read, 0x0, BUF_SIZE);
-	//memset(buffer_sent, 0x0, BUF_SIZE);
+	//memset(buffer_read, 0x0, BUFFER_SIZE);
+	//memset(buffer_sent, 0x0, BUFFER_SIZE);
 
 	/* preparo buffer donde envio dato */
 	memcpy((void *) buffer_sent, (void *) dest_mac, ETH_MAC_LEN);
@@ -288,9 +283,6 @@ int main(int argc, char *argv[])
 //	tv.tv_sec = 0;
 //	tv.tv_usec = TIMEOUT;
 
-	printf("FDS: %p\n", &fds);
-	printf("TV: %p\n", &tv);
-
 	/* Start of transmission */
 	startOfTx(filename);
 
@@ -300,35 +292,49 @@ int main(int argc, char *argv[])
 		error("Error al intentar leer archivo local.\n");
 
 	/* Abro archivo de LOG */
+/*
+	logFile = malloc(sizeof(FILE));
 	if ((logFile = fopen(LOGFILE, "w")) == NULL)
 		error("Error al intentar abrir archivo de log");
+*/
 
-	fprintf(logFile, "'Nro. Chunk' 'Cant. Reenvios' 'Cant. ACK otro nro. secuencia' 'Cant. veces que se supero el Limite' 'Cant. veces llego timeout' 'Cant. veces dio error'\n");
+/*
+	if (fprintf(logFile, "'Nro. Chunk' 'Cant. Reenvios' 'Cant. ACK otro nro. secuencia' 'Cant. veces que se supero el Limite' 'Cant. veces llego timeout' 'Cant. veces dio error'\n") < 0)
+		error ("fprintf()");
+*/
+
+	largo_tramo = CHUNK*CANT_CHUNKS;
 
 	/* Leo archivo de forma secuencial */
 	nro_secuencia_enviado = 0;
 	while (1) {
-		nro_chunk++;
-		fprintf(logFile, "%u", nro_chunk);
+		nro_chunk += CANT_CHUNKS;
+/*
+		if (fprintf(logFile, "%u", nro_chunk) < 0)
+			error ("fprintf()");
+*/
 		/* Avanza en la lectura del archivo hacia el siguiente chunk */
-//		length_read = read(filefd, buffer_read, CHUNK*CANT_CHUNKS);
-		length_read = read(filefd, buffer_read, CHUNK);
+		length_read = read(filefd, buffer_read, largo_tramo);
+
 #ifdef DEBUG
 		printf("Se leyeron %d bytes del archivo\n", length_read);
 #endif
+
+		/* Se leyeron bytes del archivo */
 		if (length_read > 0) {
 			total_file_read += length_read;
 
+			/* Avisa si leyó menos de lo que se pidió (ultimo chunk) */
 #ifdef DEBUG
-		/* Avisa si leyó menos de lo que se pidió (ultimo chunk) */
-		if (length_read != CHUNK)
-			printf("Se quisieron leer %d pero se leyeron %d bytes del archivo\n", CHUNK, length_read);
-
+			if (length_read != largo_tramo)
+				printf("Se quisieron leer %d pero se leyeron %d bytes del archivo\n", CHUNK*CANT_CHUNKS, length_read);
 			dump_buffer (data, length_read + RAW_HEADER_LEN + 1);
 #endif
+
 		/* error en lectura de archivo */
 		} else if (length_read < 0) {
 			error ("read() ");
+
 		/* EOF */
 		} else { /* length_read == 0 */
 //			printf ("Fin de archivo\n");
@@ -338,29 +344,14 @@ int main(int argc, char *argv[])
 		}
 
 
-		/* preparo buffer donde envio dato */
-/*
-		memcpy((void *) buffer_sent, (void *) dest_mac, ETH_MAC_LEN);
-
-		dump_buffer(buffer_sent, 8);
-
-		memcpy((void *) (buffer_sent + ETH_MAC_LEN), (void *) src_mac,
-			   ETH_MAC_LEN);
-
-		dump_buffer(buffer_sent, ETH_MAC_LEN);
-*/
 		/* Numero de secuencia */
-		data[0] = nro_secuencia_enviado;
+//		data[0] = nro_secuencia_enviado;
 
 		// Debugging
 		data[1] = 'C';
 
 		/* Contenido del chunk del archivo */
-//     	printf("Marca LENGTH: %d\n", length_read);
 		memcpy((void *) (data + RAW_HEADER_LEN), (void *) buffer_read, length_read);
-//     	printf("BufferSENT: %s\n", (char *) buffer_sent);
-
-//		dump_buffer(buffer_sent, length_read + RAW_HEADER_LEN + 1);
 
 		/* Envio paquete */
 #ifdef DEBUG
@@ -372,18 +363,29 @@ int main(int argc, char *argv[])
 		cantidad_superar_limite = 0;
 		cantidad_timeout = 0;
 		cantidad_error = 0;
+
 		while (1) {
 			cantidad_reenvios++;
 			if (retval != 1) {
-			length_sent =
-				sendto(s, buffer_sent, ETH_HEADER_LEN + RAW_HEADER_LEN + length_read, 0,
-					   (struct sockaddr *) &socket_address,
-					   sizeof(socket_address));
-//			if (length_sent < 0)
-			/* Ignora error si no pudo enviar por estar lleno el buffer de salida */
-			if ((length_sent < 0) && (errno != EAGAIN) && (errno != EWOULDBLOCK)) {
-				error("sendto(): ");
-			}
+				for (i=0; i<CANT_CHUNKS && length_read > 0; i++) {
+
+					/* Numero de secuencia */
+					data[0] = nro_secuencia_enviado+i;
+
+					/* Contenido del chunk del archivo */
+					memcpy((void *) (data + RAW_HEADER_LEN), (void *) (buffer_read + i*CHUNK), CHUNK);
+
+					length_sent =
+						sendto(s, buffer_sent, ETH_HEADER_LEN + RAW_HEADER_LEN + ((CHUNK < length_read) ? CHUNK : length_read), 0,
+							   (struct sockaddr *) &socket_address,
+							   sizeof(socket_address));
+
+					/* Ignora error si no pudo enviar por estar lleno el buffer de salida */
+					if ((length_sent < 0) && (errno != EAGAIN) && (errno != EWOULDBLOCK)) {
+						error("sendto(): ");
+					}
+					length_read -= CHUNK;
+				}
 			}
 
 			if ((retval = esperar_ack(nro_secuencia_enviado)) == 0) {
@@ -401,40 +403,30 @@ int main(int argc, char *argv[])
 				//printf("Esperando ACK de secuencia número %d\n", nro_secuencia_enviado);
 			}
 		}
-		fprintf(logFile, " %u %u %u %u %u", cantidad_reenvios, cantidad_ack_otro, cantidad_superar_limite, cantidad_timeout, cantidad_error);
+/*
+		if (fprintf(logFile, " %u %u %u %u %u\n", cantidad_reenvios, cantidad_ack_otro, cantidad_superar_limite, cantidad_timeout, cantidad_error) < 0)
+			error ("fprintf()");
+*/
 
 
-		nro_secuencia_enviado++;
+//		nro_secuencia_enviado++;
+		nro_secuencia_enviado += CANT_CHUNKS;
 		/* Nro de secuencia 0xF0 al 0xFF está reservador para control */
-		if (nro_secuencia_enviado >= 0xF0)
+		if ((nro_secuencia_enviado + CANT_CHUNKS) >= 0xF0)
 			nro_secuencia_enviado = 0;
 
 
-
-
-		fprintf(logFile, "\n");
+/*
+		if (fprintf(logFile, "%s", "\n") < 0)
+			error ("fprintf() ");
+*/
 	} /* while ((length_read = read(filefd, buffer_read, CHUNK)) > 0) { */
 
 
 
 	/* End of transmission */
-	endOfTx();
-	fclose(logFile);
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+//	endOfTx();
+//	fclose(logFile);
 
 
 	printf("Totally sent: %ld packets. Cant timeouts %lu\n",
@@ -506,12 +498,10 @@ void startOfTx(char *filename)
 #ifdef DEBUG
 	printf("Enviando inicio de transmisión\n");
 #endif
-	printf("Enviando inicio de transmisión\n");
-	printf("SOCKET address: %p\n", &socket_address);
 //	dump_buffer(buffer_sent, ETH_HEADER_LEN + RAW_HEADER_LEN + filename_size);
 
 	while (1) {
-		dump_buffer(buffer_sent, ETH_HEADER_LEN + RAW_HEADER_LEN + filename_size);
+//		dump_buffer(buffer_sent, ETH_HEADER_LEN + RAW_HEADER_LEN + filename_size);
 		length_sent =
 			sendto(s, buffer_sent, ETH_HEADER_LEN + RAW_HEADER_LEN + filename_size, 0,
 				   (struct sockaddr *) &socket_address,
@@ -573,7 +563,7 @@ void endOfTx(void)
 
 //	printf("Escribí %d bytes por el socket.\n", length_sent);
 	while ((retval = esperar_ack(254)) != 0) {
-		printf("Esperando ACK de endOfTransmission.\n");
+//		printf("Esperando ACK de endOfTransmission.\n");
 		printf("Función devuelve error %d.\n", retval);
 	}
 	printf("\nArchivo copiado con éxito\n");
@@ -676,9 +666,7 @@ int esperar_ack(unsigned int nro_secuencia)
 	/* Puntero a la estructura que almacena la información de la cabecera ethernet del paquete RECIBIDO */
 	struct ethhdr *eh_recv = (struct ethhdr *) etherhead_recv;
 
-//	printf("Socket File Descriptor: %d\n", s);
-//	printf("FDS: %p\n", &fds);
-//	printf("TV: %p\n", &tv);
+//	printf("Esperando ACK para nro. de secuencia: %u\n", nro_secuencia);
 
 	FD_ZERO(&fds);
 	FD_SET(s, &fds);
@@ -693,7 +681,7 @@ int esperar_ack(unsigned int nro_secuencia)
 			cantidad_paquetes_entrantes++;
 
 			/* Recupero dato leído */
-			length_recv = recvfrom(s, buffer_recv, BUF_SIZE, 0, NULL, NULL);
+			length_recv = recvfrom(s, buffer_recv, BUFFER_SIZE, 0, NULL, NULL);
 			if (length_recv == -1)
 				error("recvfrom()");
 
@@ -708,7 +696,7 @@ int esperar_ack(unsigned int nro_secuencia)
 			 	/* Largo del paquete es igual al largo mínimo posible para ethernet */
 				(length_recv == ETH_MIN_LEN) &&
 			 	/* El contenido del paquete se completa con NULL */
-				(memcmp ((const void *) (buffer_recv + ETH_HEADER_LEN + RAW_HEADER_LEN), (const void *) null_buffer, (ETH_MIN_LEN - ETH_HEADER_LEN - RAW_HEADER_LEN)) == 0) &&
+				(memcmp ((const void *) (buffer_recv + ETH_HEADER_LEN + RAW_HEADER_LEN + CANT_CHUNKS), (const void *) null_buffer, (ETH_MIN_LEN - ETH_HEADER_LEN - RAW_HEADER_LEN - CANT_CHUNKS)) == 0) &&
 			 	/* La dirección ethernet destino es nuestra propia dirección */
 				(memcmp ((const void *) eh_recv->h_dest, (const void *) src_mac, ETH_MAC_LEN) == 0)
 				) {
@@ -723,17 +711,16 @@ int esperar_ack(unsigned int nro_secuencia)
 				if (nro_secuencia_recibido == nro_secuencia) {
 #ifdef DEBUG
 					printf("Recibido ACK ordenado, para nro. de secuencia %u\n", nro_secuencia);
-					printf("\nDUMP handshake received\n");
-					for (i = 0; i < (ETH_HEADER_LEN + RAW_HEADER_LEN); i++)
-						printf("%02X ", *(unsigned char *) (buffer_recv + i));
-					printf("\nFin de DUMP\n");
+					dump_buffer(buffer_recv, ETH_HEADER_LEN + RAW_HEADER_LEN + CANT_CHUNKS);
 #endif
 
 //					seguir_esperando_ack = 0;
 //					leer_siguiente_chunk = 1;
 //					cantidad_reintentos = 0;
+
 					if (nro_secuencia < 0xF0)
 						printf(".");
+
 					return 0;
 
 				/* nro_secuencia_recibido != nro_secuencia_enviado */
@@ -792,15 +779,4 @@ int esperar_ack(unsigned int nro_secuencia)
 	return -1;
 }
 
-
-void dump_buffer(unsigned char *buffer, int size)
-{
-	int i = 0;
-//#ifdef DEBUG
-	printf("\nDUMP\n");
-	for (i = 0; i < size; i++)
-		printf("%02X ", *(unsigned char *) (buffer_sent + i));
-	printf("\nFin de DUMP\n");
-//#endif
-}
 
