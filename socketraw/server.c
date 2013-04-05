@@ -23,7 +23,14 @@
 
 #include <netinet/in.h>
 
+#include <openssl/md5.h>
+
+#include <stdbool.h>
+
 #include "common.h"
+
+#define TRUE 1
+#define FALSE 0
 
 //#define DEBUG 1
 #undef DEBUG
@@ -79,6 +86,11 @@ unsigned char *data;
 int main(void)
 {
 	char serverID = 'S';
+	char filename[256];
+	unsigned char checksum[MD5_DIGEST_LENGTH];
+	int filesize = 0;
+	bool ack_completo = FALSE;
+	bool mandar_ack = FALSE;
 
 	/* Variable asociadas al paquete ENTRANTE */
 
@@ -107,8 +119,11 @@ int main(void)
 
 
 	// REVISAR
-	int length;					/*length of received packet */
+	int length;					/* length of received packet */
 	int sent;
+	int dist;
+	unsigned char *ack_posicion = NULL;
+	int bytes_archivo = 0;
 	char path[BUFFER_SIZE];
 	unsigned char nro_secuencia = 0xEF, nro_secuencia_anterior = 0xEF;
 
@@ -117,7 +132,16 @@ int main(void)
 	void *buffer_write = NULL;
 	buffer_write = (void *) malloc(BUFFER_SIZE*CANT_CHUNKS);	/*Buffer for Ethernet Frame */
 
-	unsigned int primer_paquete = 1, posicion = 0, saldo = 0;
+	/* 
+	 * Variable indica si el paquete recibido es el primero de la copia.
+	 * Esta variable se vuelve a poner a 1 cuando ha llegado el final de
+	 * un archivo y se espera el siguiente. En cualquier otro caso se pone
+	 * a cero.
+	 */
+	unsigned int primer_paquete = 1;
+
+	unsigned int posicion = 0;
+//	unsigned int saldo = 0;
 //	unsigned char anterior = 0xEF, nuevo = 0xEF;
 	unsigned char nuevo = 0xEF;
 
@@ -125,7 +149,8 @@ int main(void)
 	int i;
 	fd_set rfds;
 	struct timeval tv;
-	int retval, cantidad_de_reintentos = 0;
+	int retval;
+//	int cantidad_de_reintentos = 0;
 
 	/* Buffer en 0xFF, para fines comparativos */
 	void *null_buffer = NULL, *notnull_buffer = NULL;
@@ -249,15 +274,37 @@ int main(void)
 
 				/* Nombre del archivo */
 				if (nuevo == 0xFF) {
+					/* Blanquea buffer donde almacena lo que escribe en archivo */
+					memset(buffer_write, 0x0, BUFFER_SIZE*CANT_CHUNKS);
+
 					memcpy((void *) buffer_write, (void *) (buffer_recv + ETH_HEADER_LEN + RAW_HEADER_LEN), length - ETH_HEADER_LEN - RAW_HEADER_LEN);
-					sprintf(path, "%s/%s", PATH_DESTINO, (char *) buffer_write);
-					printf("Recibiendo archivo %s\n", path);
+					sscanf(buffer_write, "%s %d", filename, &filesize);
+
+					sprintf(path, "%s/%s", PATH_DESTINO, (char *) filename);
+					printf("Recibiendo archivo %s de tamaño %d\n", path, filesize);
+
+					/* Archivo está abierto actualmente. Lo cierro. */
+					if (filefd != 0) {
+						close(filefd);
+						filefd = 0;
+					}
+
 					/* Abro archivo si no ha sido abierto */
-					if (filefd == 0) {
+//					if (filefd == 0) {
 						if ((filefd = (open(path, O_WRONLY | O_CREAT | O_TRUNC))) < 0) {
 							error("Error al intentar leer archivo local.\n");
 						}
-					}
+//					}
+
+					/* Blanquea buffer de paquete saliente */
+					memset((void *) (buffer_sent + ETH_HEADER_LEN + RAW_HEADER_LEN), 0x0, ETH_MIN_LEN - ETH_HEADER_LEN - RAW_HEADER_LEN);
+
+					/* Blanquea buffer donde almacena lo que escribe en archivo */
+//					memset(buffer_write, 0x0, BUFFER_SIZE*CANT_CHUNKS);
+
+					/* Blanqueo contador de bytes a escribir en archivo */
+					bytes_archivo = 0;
+
 					//nro_secuencia_ant = 0xEF;
 					nro_secuencia_anterior = 0x00;
 
@@ -266,7 +313,7 @@ int main(void)
 						error("enviar_ack():");
 
 //					anterior = 0xEF;
-					memset((void *) (buffer_sent + ETH_HEADER_LEN + RAW_HEADER_LEN), 0x0, CANT_CHUNKS);
+					total_escrito = 0;
 				/* EOF */
 				} else if (nuevo == 0xFE) {
 					/*
@@ -277,8 +324,11 @@ int main(void)
 //					printf("HAY ALGO PARA ESCRIBIR?: saldo %u", saldo);
 //					dump_buffer(buffer_sent + ETH_HEADER_LEN + RAW_HEADER_LEN, CANT_CHUNKS);
 					if (memcmp((void *) (buffer_sent + ETH_HEADER_LEN + RAW_HEADER_LEN), (void *) null_buffer, CANT_CHUNKS) != 0) {
-						write(filefd, buffer_write, saldo);
-						total_escrito += saldo;
+//						write(filefd, buffer_write, saldo);
+						write(filefd, buffer_write, bytes_archivo);
+//						total_escrito += saldo;
+						total_escrito += bytes_archivo;
+						printf("\r%lu\n", total_escrito);
 					}
 
 					if (filefd != 0) {
@@ -287,54 +337,212 @@ int main(void)
 					}
 
 					memset((void *) (buffer_sent + ETH_HEADER_LEN + RAW_HEADER_LEN), 0x0, CANT_CHUNKS);
-					sent = enviar_ack(etherhead, nro_secuencia);
+
+					/* El siguiente igualamiento es por si debe retransmitir paquete de finalización */
+					nro_secuencia_anterior = nro_secuencia;
+					sent = enviar_ack(etherhead, nro_secuencia_anterior);
+					if (sent == -1)
+						error("enviar_ack():");
+
+//					primer_paquete = 0;
+					filefd = 0;
+
+
+
+
+
+
+
+				/* CHECKSUM */
+				} else if (nuevo == 0xFD) {
+					printf("Calculando MD5sum\n");
+					md5sum(path, &checksum[0]);
+/*
+	    int n=0;
+        for(n=0; n<MD5_DIGEST_LENGTH; n++)
+                printf("%02x ", checksum[n]);
+        printf("\n");
+
+
+
+					printf("MD5sum: %s\n", checksum);
+*/
+					memcpy((void *) (buffer_sent + ETH_HEADER_LEN + RAW_HEADER_LEN), (void *) checksum, MD5_DIGEST_LENGTH);
+					/* El siguiente igualamiento es por si debe retransmitir paquete con CHECKSUM */
+					nro_secuencia_anterior = nro_secuencia;
+					sent = enviar_ack(etherhead, nro_secuencia_anterior);
 					if (sent == -1)
 						error("enviar_ack():");
 
 					primer_paquete = 0;
-					filefd = 0;
+					memset(buffer_write, 0x0, BUFFER_SIZE*CANT_CHUNKS);
+
+
 
 				/* Contenido del archivo */
 				} else {
-
-					/* Si envía secuencia de la siguiente ráfaga, confirma que llegó el ACK al cliente */
-					int dist = distancia(nro_secuencia, nro_secuencia_anterior);
-//					printf("DIST: %d, %d - %d\n", dist, nro_secuencia, nro_secuencia_anterior);
-//					if (distancia(nro_secuencia, nro_secuencia_anterior) >= CANT_CHUNKS) {
+					/* 
+					 * El chunk recibido es de la porción esperada o no ?
+					 */
+					dist = distancia(nro_secuencia, nro_secuencia_anterior);
 					if (dist >= CANT_CHUNKS) {
-						/* Escribo en archivo */
-						write(filefd, buffer_write, CHUNK * CANT_CHUNKS);
-						total_escrito += CHUNK * CANT_CHUNKS;
-//						printf("CANTIDAD ESCRITA: %d, TOTAL: %ld\n", CHUNK * CANT_CHUNKS, total_escrito);
-//						printf("SALDO AL MOMENTO DE ESCRIBIR: %u\n", saldo);
-//						exit(0);
+						/* 
+						 * En el paso anterior se envio ACK ?
+						 */
+						printf("\n\nACK ESTA COMPLETO AL COMIENZO DE ESTE CICLO ?: %c\n", (ack_completo) ? 'S' : 'N');
+						if (ack_completo) {
+							/* Escribo en el archivo */
+							write(filefd, buffer_write, bytes_archivo);
+							total_escrito += CHUNK * CANT_CHUNKS;
+							printf("Total Escrito: %lu", total_escrito);
 
-						memset((void *) (buffer_sent + ETH_HEADER_LEN + RAW_HEADER_LEN), 0x0, CANT_CHUNKS);
-						nro_secuencia_anterior += CANT_CHUNKS;
-						if (nro_secuencia_anterior >= (0xF0 - CANT_CHUNKS)) {
-							nro_secuencia_anterior -= (0xF0 - CANT_CHUNKS);
-//							exit(0);
+							/* Blanqueo buffer para archivo. Se puede evitar */
+							/* Blanqueo contador de bytes a escribir en archivo */
+							bytes_archivo = 0;
+
+							/* Blanqueo ACK */
+						printf("\n\nBLANQUEO ACK AL COMIENZO DE ESTE CICLO\n");
+							memset((void *) (buffer_sent + ETH_HEADER_LEN + RAW_HEADER_LEN), 0x0, CANT_CHUNKS);
+							ack_completo = 0;
+
+							/* Almaceno la siguiente porcion a esperar */
+							nro_secuencia_anterior += CANT_CHUNKS;
+							if (nro_secuencia_anterior >= (0xF0 - CANT_CHUNKS)) {
+								nro_secuencia_anterior -= (0xF0 - CANT_CHUNKS);
+							}
+
+						/* 
+						 * Si en el paso anterior no se envio ACK, hay un ERROR
+						 */
+						} else {
+							printf("ERROR. Nro secuencia %u, Nro secuencia anterior %u, distancia %u\n", nro_secuencia, nro_secuencia_anterior, dist);
+							exit(0);
 						}
-						saldo = 0;
 					}
 
+
+					/* 
+					 * La posicion en el ACK correspondiente a este chunk NO está seteada aún ?
+					 */
 					posicion = nro_secuencia % CANT_CHUNKS;
+//					printf("COMPLETA POSICION %d para nro de secuencia %d\n", posicion * CHUNK, nro_secuencia);
+//					printf("VALOR DE LA DIRECCION DEL BUFFER %p\n", buffer_sent);
+					ack_posicion = (unsigned char *) (buffer_sent + ETH_HEADER_LEN + RAW_HEADER_LEN + posicion);
+					printf("VALOR DE LA POSICION %d EN EL ACK %d\n", posicion, *ack_posicion);
+					if ((*ack_posicion) == 0) {
 
-					/* Escribo en el buffer al archivo, si no fue completado aún */
-//					if ((void *)(buffer_sent + ETH_HEADER_LEN + RAW_HEADER_LEN + posicion) == 0x0) {
-						printf("COMPLETA POSICION %d para nro de secuencia %d\n", posicion * CHUNK, nro_secuencia);
-						memcpy((void *) (buffer_write + posicion * CHUNK), (void *) (buffer_recv + ETH_HEADER_LEN + RAW_HEADER_LEN), length - ETH_HEADER_LEN - RAW_HEADER_LEN);
+						/* Seteo posicion correspondiente en ACK */
 						memset((void *) (buffer_sent + ETH_HEADER_LEN + RAW_HEADER_LEN + posicion), 0xFF, 1);
-						saldo += length - ETH_HEADER_LEN - RAW_HEADER_LEN;
-//					}
+//						*ack_posicion = 0xFF;
+//printf("LUEGO ...\n");
+//dump_buffer(buffer_sent + ETH_HEADER_LEN + RAW_HEADER_LEN, CANT_CHUNKS);
+					
+						/* Completo buffer para posterior escritura en archivo */
+						memcpy((void *) (buffer_write + posicion * CHUNK), (void *) (buffer_recv + ETH_HEADER_LEN + RAW_HEADER_LEN), length - ETH_HEADER_LEN - RAW_HEADER_LEN);
 
-					/* Termina una ráfaga. Mando ACK */
-					if ((((nro_secuencia + 1) % CANT_CHUNKS) == 0) && (! primer_paquete)) {
+						bytes_archivo += length - ETH_HEADER_LEN - RAW_HEADER_LEN;
+					} else {
+printf("Esa posicion ya está escrita. Salteando\n");
+					}
+
+					/* 
+					 * La grilla de ACK está completamente seteada ?
+					 */
+					if (memcmp((void *) (buffer_sent + ETH_HEADER_LEN + RAW_HEADER_LEN), (void *) notnull_buffer, CANT_CHUNKS) == 0) {
+						/* Seteo flag que indica que el ACK está completo */
+						ack_completo = TRUE;
+
+						/* Seteo flag que indica que se debe enviar ACK */
+						mandar_ack = 1;
+					} else {
+						/* 
+						 * El nro. de secuencia es el último de la porción ?
+						 */
+//						printf("PRIMER PAQUETE: %d\n", primer_paquete);
+						if ((((nro_secuencia + 1) % CANT_CHUNKS) == 0) && (! primer_paquete)) {
+							printf("El nro de secuencia %d es el último de la porción. Debo mandar ACK.\n", nro_secuencia);
+							mandar_ack = 1;
+						} else {
+							/* 
+							 * Es la última porción del archivo ?
+							 */
+							printf("Total escrito: %lu Filesize: %d\n", total_escrito, filesize);
+							if ((total_escrito + (posicion + 1) * CHUNK) >= filesize) {
+								printf("ULTIMA PORCION DEL ARCHIVO\n");
+								mandar_ack = 1;
+							} else
+								mandar_ack = 0;
+						}
+					}
+
+					dump_buffer(buffer_sent + ETH_HEADER_LEN + RAW_HEADER_LEN, CANT_CHUNKS);
+
+					if (mandar_ack) {
+						/* Mando ACK al cliente */
+						printf("MANDO ACK para nro de secuencia %d\n", nro_secuencia_anterior);
+						dump_buffer(buffer_sent + ETH_HEADER_LEN + RAW_HEADER_LEN, CANT_CHUNKS);
+
 						sent = enviar_ack(etherhead, nro_secuencia_anterior);
 						if (sent == -1)
 							error("enviar_ack():");
-						printf("MANDO ACK para nro de secuencia %d\n", nro_secuencia);
+
+						/* Escribo en archivo */
+//						write(filefd, buffer_write, CHUNK * CANT_CHUNKS);
+
+
+
+
+						//// NO SE DEBE ESCRIBIR SIEMPRE EL ARCHIVO. A VECES SE MANDA
+						//// EL MISMO ACK DE ANTES
+/*
+						write(filefd, buffer_write, bytes_archivo);
+						total_escrito += CHUNK * CANT_CHUNKS;
+						printf("Total Escrito: %lu", total_escrito);
+*/
 					}
+
+
+
+
+
+
+
+
+					printf("\n\nACK ESTA COMPLETO AL FINAL DE ESTE CICLO ?: %c\n", (ack_completo) ? 'S' : 'N');
+
+
+
+
+#if 0
+					/* Si envía secuencia de la siguiente ráfaga, confirma que llegó el ACK al cliente */
+						if (ack_completo) {
+						
+							////
+
+							saldo = 0;
+						}
+					}
+
+
+
+					/*
+					 * Mientras el ACK no esté completo, escribo en el buffer que luego
+					 * irá a parar al archivo.
+					 */
+					if (ack_completo == 0) {
+
+						////
+
+						saldo += length - ETH_HEADER_LEN - RAW_HEADER_LEN;
+						dump_buffer(buffer_sent + ETH_HEADER_LEN + RAW_HEADER_LEN, CANT_CHUNKS);
+					}
+
+
+					printf("TOTAL: %lu, POS: %d, CHUNK: %d\n", total_escrito, posicion, CHUNK);
+
+						////
+						ack_completo = 1;
+
 
 					/*
 					 * La grilla en buffer de respuesta está en uno, o
@@ -350,7 +558,7 @@ int main(void)
 					}
 */
 /*
-					if ((nuevo == (anterior + 1)) || (nuevo == 0 && anterior == 0xEF)) {
+					if ((nuevo == (anterior + 1)) || (nuevo == 0 && anterior == 0xEF)) 
 						memcpy((void *) buffer_write, (void *) (buffer_recv + ETH_HEADER_LEN + RAW_HEADER_LEN), length - ETH_HEADER_LEN - RAW_HEADER_LEN);
 						write(filefd, buffer_write, length - ETH_HEADER_LEN - RAW_HEADER_LEN);
 
@@ -362,14 +570,25 @@ int main(void)
 
 //					dump_buffer(buffer_recv, length);
 
+#endif
+
+
 					primer_paquete = 0;
 //					printf("SALDO: %u\n", saldo);
+
+
+
+
+
+
+
 				}
 /*
 				sent = enviar_ack(etherhead, nro_secuencia);
 				if (sent == -1)
 					error("enviar_ack():");
 */
+
 				answered_packets++;
 			} /* if (eh->h_proto == ETH_P_NULL && memcmp((const void *) eh->h_dest, (const void *) src_mac, ETH_MAC_LEN) == 0) { */
 
@@ -378,7 +597,7 @@ int main(void)
 
 		/* Timeout en la espera por un paquete entrante */
 		} else {
-			//printf("Timeout para paquete entrante\n");
+			printf("Timeout para paquete entrante\n");
 			if (!primer_paquete) {
 				sent = enviar_ack(etherhead, nro_secuencia_anterior);
 				if (sent == -1)
@@ -386,9 +605,10 @@ int main(void)
 			}
 		} /* if (retval) */
 
+/*
 		cantidad_de_reintentos++;
 		if (cantidad_de_reintentos > LIMITE_REINTENTOS) {
-//			printf("Llegó al límite de reintentos\n");
+			printf("Llegó al límite de reintentos\n");
 			if (!primer_paquete) {
 				sent = enviar_ack(etherhead, nro_secuencia_anterior);
 				if (sent == -1)
@@ -396,6 +616,7 @@ int main(void)
 			}
 			cantidad_de_reintentos=0;
 		}
+*/
 	} /* while(1) */
 }
 
@@ -513,12 +734,13 @@ int enviar_ack(unsigned char *etherhead, unsigned char nro_secuencia)
 	memcpy((void *) etherhead_sent, (const void *) (etherhead + ETH_MAC_LEN), ETH_MAC_LEN);
 
 	memcpy((void *) (buffer_sent + ETH_HEADER_LEN), (const void *) &nro_secuencia, 1);
+//	memset((void *) (buffer_sent + ETH_HEADER_LEN + RAW_HEADER_LEN), 0x00, ETH_MIN_LEN - ETH_HEADER_LEN - RAW_HEADER_LEN);
 
 	sent = sendto(s, buffer_sent, ETH_MIN_LEN, 0,
 	   (struct sockaddr *) &socket_address,
 	   sizeof(socket_address));
 
-//	dump_buffer(buffer_sent, 20);
+	dump_buffer(buffer_sent + ETH_HEADER_LEN, 18);
 
 	return sent;
 }

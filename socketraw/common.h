@@ -1,6 +1,7 @@
 extern void error(char *);
 extern void warning(char *);
 extern void dump_buffer(unsigned char *, int);
+extern void md5sum(char *, unsigned char *);
 
 /*
  *
@@ -36,4 +37,5 @@ extern void dump_buffer(unsigned char *, int);
 //#define CHUNK ETH_FRAME_TOTALLEN-ETH_HEADER_LEN-RAW_HEADER_LEN
 #define CHUNK 1498
 
-#define CANT_CHUNKS 16
+//#define CANT_CHUNKS 16
+#define CANT_CHUNKS 8

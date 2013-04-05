@@ -1,4 +1,4 @@
-CFLAGS=-Wall -O2
+CFLAGS=-Wall -O2 -lssl
 #CFLAGS=-Wall -O2 -DDEBUG
 
 all: client server
